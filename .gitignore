@@ -1,7 +1,7 @@
 .DS_Store
 .build/
+build/
 *.xcuserstate
 xcuserdata/
 *.xcworkspace/xcuserdata/
 cache/
-migrate.log

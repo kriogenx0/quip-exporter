@@ -1,5 +1,5 @@
 APP        := QuipExporter
-BUNDLE     := $(APP).app
+BUNDLE     := build/$(APP).app
 EXE        := .build/release/$(APP)
 CONTENTS   := $(BUNDLE)/Contents
 CACHE_DIR  := $(HOME)/Library/Application Support/QuipExporter/BlobCache
@@ -14,6 +14,7 @@ app: build
 	mkdir -p $(CONTENTS)/MacOS $(CONTENTS)/Resources
 	cp $(EXE) $(CONTENTS)/MacOS/$(APP)
 	cp Info.plist $(CONTENTS)/
+	@if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns $(CONTENTS)/Resources/; fi
 	codesign --force --deep --sign - $(BUNDLE)
 	@echo "$(BUNDLE) ready"
 
@@ -22,7 +23,7 @@ open: app
 	open $(BUNDLE)
 
 clean:
-	rm -rf .build $(BUNDLE)
+	rm -rf .build build
 
 clean-cache:
 	rm -rf "$(CACHE_DIR)"
