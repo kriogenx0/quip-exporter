@@ -2,6 +2,10 @@
 
 A macOS app that migrates Quip documents, spreadsheets, and folders to Apple Notes or Markdown files.
 
+## Download
+
+[Download QuipExporter.zip](https://github.pie.apple.com/a-vaos/quip-export/releases/latest/download/QuipExporter.zip)
+
 ## How it works
 
 The app walks your Quip account starting from the Desktop, Starred, and Shared folder roots. For each document it finds, it:
