@@ -22,6 +22,8 @@
     <true/>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Quip Exporter needs to control Apple Notes to create notes from your Quip documents.</string>
 </dict>
