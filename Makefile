@@ -4,7 +4,7 @@ EXE        := .build/release/$(APP)
 CONTENTS   := $(BUNDLE)/Contents
 CACHE_DIR  := $(HOME)/Library/Application Support/QuipExporter/BlobCache
 
-.PHONY: build app open clean clean-cache
+.PHONY: build app open clean clean-cache build-zip
 
 build:
 	swift build -c release
@@ -21,6 +21,11 @@ app: build
 open: app
 	-killall $(APP) 2>/dev/null; sleep 0.5
 	open $(BUNDLE)
+
+build-zip: app
+	rm -f build/$(APP).zip
+	cd build && zip -r --symlinks $(APP).zip $(APP).app
+	@echo "build/$(APP).zip ready"
 
 clean:
 	rm -rf .build build
