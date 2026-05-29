@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @AppStorage("quipToken") private var quipToken = ""
+    @AppStorage("quipDomain") private var quipDomain: QuipDomain = .quipApple
     @AppStorage("destination") private var destination: ExportDestination = .appleNotes
     @AppStorage("deleteAfterCopy") private var deleteAfterCopy = false
     @AppStorage("notesAccount") private var notesAccount = ""
@@ -13,6 +14,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             SettingsPanel(
                 quipToken: $quipToken,
+                quipDomain: $quipDomain,
                 destination: $destination,
                 deleteAfterCopy: $deleteAfterCopy,
                 notesAccount: $notesAccount,
@@ -33,6 +35,7 @@ struct ContentView: View {
             ControlBar(
                 runner: runner,
                 quipToken: quipToken,
+                quipDomain: quipDomain,
                 destination: destination,
                 deleteAfterCopy: deleteAfterCopy,
                 notesAccount: notesAccount,
@@ -47,6 +50,7 @@ struct ContentView: View {
 
 struct SettingsPanel: View {
     @Binding var quipToken: String
+    @Binding var quipDomain: QuipDomain
     @Binding var destination: ExportDestination
     @Binding var deleteAfterCopy: Bool
     @Binding var notesAccount: String
@@ -60,7 +64,7 @@ struct SettingsPanel: View {
                 HStack {
                     Text("Quip Token").font(.headline)
                     Spacer()
-                    Link("Get token", destination: URL(string: "https://quip-apple.com/dev/token")!)
+                    Link("Get token", destination: quipDomain.tokenURL)
                         .font(.body)
                 }
 
@@ -75,6 +79,18 @@ struct SettingsPanel: View {
                     }
                     .buttonStyle(.plain)
 
+                }
+
+                HStack {
+                    Text("Platform")
+                    Spacer()
+                    Picker("", selection: $quipDomain) {
+                        ForEach(QuipDomain.allCases) { d in
+                            Text(d.rawValue).tag(d)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
                 }
             }
 
@@ -173,6 +189,7 @@ struct LogPanel: View {
 struct ControlBar: View {
     @ObservedObject var runner: MigrationRunner
     let quipToken: String
+    let quipDomain: QuipDomain
     let destination: ExportDestination
     let deleteAfterCopy: Bool
     let notesAccount: String
@@ -209,6 +226,7 @@ struct ControlBar: View {
                 Button("Start Exporting") {
                     runner.start(
                         token: quipToken,
+                        domain: quipDomain,
                         destination: destination,
                         deleteAfterCopy: deleteAfterCopy,
                         rateDelay: 0.5,

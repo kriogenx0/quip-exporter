@@ -15,6 +15,14 @@ enum ExportDestination: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum QuipDomain: String, CaseIterable, Identifiable {
+    case quipApple = "quip-apple.com"
+    case quip = "quip.com"
+    var id: String { rawValue }
+    var baseURL: URL { URL(string: "https://platform.\(rawValue)/1")! }
+    var tokenURL: URL { URL(string: "https://\(rawValue)/dev/token")! }
+}
+
 // MARK: - Quip API models
 
 struct QuipCurrentUserResponse: Decodable {
