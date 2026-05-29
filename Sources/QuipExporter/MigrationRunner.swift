@@ -14,6 +14,7 @@ class MigrationRunner: ObservableObject {
 
     func start(
         token: String,
+        domain: QuipDomain,
         destination: ExportDestination,
         deleteAfterCopy: Bool,
         rateDelay: Double,
@@ -26,7 +27,7 @@ class MigrationRunner: ObservableObject {
 
         let blobCache = self.blobCache
         migrationTask = Task.detached { [weak self] in
-            let client = QuipClient(token: token, rateDelay: rateDelay)
+            let client = QuipClient(token: token, rateDelay: rateDelay, domain: domain)
 
             func log(_ msg: String, level: LogEntry.Level = .info) async {
                 let entry = LogEntry(message: msg, level: level)
@@ -317,11 +318,14 @@ private func fetchBlob(threadId: String, blobHash: String, client: QuipClient, b
     return data
 }
 
-private func inlineImages(
-    html: String, threadId: String, client: QuipClient, blobCache: URL,
-    log: (String, LogEntry.Level) async -> Void
+private func replaceBlobSrcs(
+    in html: String,
+    client: QuipClient,
+    blobCache: URL,
+    log: (String, LogEntry.Level) async -> Void,
+    makeSrc: (Data, String) throws -> String
 ) async -> String {
-    let pattern = #"src="(?:https://platform\.quip\.com/1)?/blob/([A-Za-z0-9]+)/([A-Za-z0-9]+)""#
+    let pattern = #"src="(?:https://platform\.quip(?:-apple)?\.com/1)?/blob/([A-Za-z0-9]+)/([A-Za-z0-9]+)""#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return html }
     let ns = html as NSString
     let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
@@ -333,8 +337,7 @@ private func inlineImages(
         let hash = ns.substring(with: match.range(at: 2))
         do {
             let data = try await fetchBlob(threadId: tid, blobHash: hash, client: client, blobCache: blobCache)
-            let mime = data.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
-            replacements.append((match.range, "src=\"data:\(mime);base64,\(data.base64EncodedString())\""))
+            replacements.append((match.range, "src=\"\(try makeSrc(data, hash))\""))
         } catch {
             await log("Could not fetch blob \(hash): \(error.localizedDescription)", .warning)
         }
@@ -347,35 +350,24 @@ private func inlineImages(
     return result as String
 }
 
+private func inlineImages(
+    html: String, threadId: String, client: QuipClient, blobCache: URL,
+    log: (String, LogEntry.Level) async -> Void
+) async -> String {
+    await replaceBlobSrcs(in: html, client: client, blobCache: blobCache, log: log) { data, _ in
+        let mime = data.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
+        return "data:\(mime);base64,\(data.base64EncodedString())"
+    }
+}
+
 private func resolveImagesForMarkdown(
     html: String, threadId: String, client: QuipClient, blobCache: URL,
     dir: URL, markdownWriter: MarkdownWriter,
     log: (String, LogEntry.Level) async -> Void
 ) async -> String {
-    let pattern = #"src="(?:https://platform\.quip\.com/1)?/blob/([A-Za-z0-9]+)/([A-Za-z0-9]+)""#
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return html }
-    let ns = html as NSString
-    let matches = regex.matches(in: html, range: NSRange(location: 0, length: ns.length))
-    var replacements: [(NSRange, String)] = []
-
-    for match in matches {
-        guard !Task.isCancelled else { break }
-        let tid = ns.substring(with: match.range(at: 1))
-        let hash = ns.substring(with: match.range(at: 2))
-        do {
-            let data = try await fetchBlob(threadId: tid, blobHash: hash, client: client, blobCache: blobCache)
-            let relPath = try markdownWriter.saveImage(data: data, blobHash: hash, dir: dir)
-            replacements.append((match.range, "src=\"\(relPath)\""))
-        } catch {
-            await log("Could not fetch blob \(hash): \(error.localizedDescription)", .warning)
-        }
+    await replaceBlobSrcs(in: html, client: client, blobCache: blobCache, log: log) { data, hash in
+        try markdownWriter.saveImage(data: data, blobHash: hash, dir: dir)
     }
-
-    let result = NSMutableString(string: html)
-    for (range, replacement) in replacements.reversed() {
-        result.replaceCharacters(in: range, with: replacement)
-    }
-    return result as String
 }
 
 private func escHtml(_ s: String) -> String {

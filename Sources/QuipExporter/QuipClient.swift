@@ -3,12 +3,13 @@ import Foundation
 actor QuipClient {
     private let token: String
     private let rateDelay: TimeInterval
-    private let base = URL(string: "https://platform.quip-apple.com/1")!
+    private let base: URL
     private let session = URLSession.shared
 
-    init(token: String, rateDelay: TimeInterval) {
+    init(token: String, rateDelay: TimeInterval, domain: QuipDomain = .quipApple) {
         self.token = token
         self.rateDelay = rateDelay
+        self.base = domain.baseURL
     }
 
     private func authRequest(_ path: String) -> URLRequest {
