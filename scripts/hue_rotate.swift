@@ -26,10 +26,9 @@ result.lockFocus()
 // Draw hue-rotated base
 NSImage(cgImage: cg, size: size).draw(in: NSRect(origin: .zero, size: NSSize(width: size.width, height: size.height)))
 
-// Build white-tinted chevron.right at ~40% of icon width
 let ptSize = size.width * 0.35
 let symConfig = NSImage.SymbolConfiguration(pointSize: ptSize, weight: .semibold)
-if let raw = NSImage(systemSymbolName: "chevron.right.2", accessibilityDescription: nil)?
+if let raw = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)?
         .withSymbolConfiguration(symConfig) {
     // Tint to white via sourceAtop
     let tinted = NSImage(size: raw.size)
