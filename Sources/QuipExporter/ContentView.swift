@@ -223,7 +223,7 @@ struct ControlBar: View {
                 Button("Stop", role: .destructive) { runner.stop() }
                     .keyboardShortcut(.escape, modifiers: [])
             } else {
-                Button("Start Exporting") {
+                Button {
                     runner.start(
                         token: quipToken,
                         domain: quipDomain,
@@ -233,6 +233,8 @@ struct ControlBar: View {
                         notesAccount: notesAccount,
                         markdownOutputDir: markdownOutputDir
                     )
+                } label: {
+                    Label("Start Exporting", systemImage: "arrow.down.circle.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canStart)
