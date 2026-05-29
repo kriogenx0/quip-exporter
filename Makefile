@@ -1,35 +1,54 @@
-APP        := QuipExporter
-BUNDLE     := build/$(APP).app
-EXE        := .build/release/$(APP)
-CONTENTS   := $(BUNDLE)/Contents
-CACHE_DIR  := $(HOME)/Library/Application Support/QuipExporter/BlobCache
+APP            := QuipExporter
+BUILD_BUNDLE   := build/$(APP).app
+INSTALL_BUNDLE := /Applications/$(APP).app
+CONTENTS       := $(BUILD_BUNDLE)/Contents
+CACHE_DIR      := $(HOME)/Library/Application Support/$(APP)/BlobCache
 
-.PHONY: build app open clean clean-cache build-zip
+.PHONY: build dev publish install uninstall open close reinstall-open clean reinstall
 
 build:
-	swift build -c release
-
-app: build
-	rm -rf $(BUNDLE)
+	swift build
+	rm -rf $(BUILD_BUNDLE)
 	mkdir -p $(CONTENTS)/MacOS $(CONTENTS)/Resources
-	cp $(EXE) $(CONTENTS)/MacOS/$(APP)
+	cp .build/debug/$(APP) $(CONTENTS)/MacOS/$(APP)
 	cp Info.plist $(CONTENTS)/
 	@if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns $(CONTENTS)/Resources/; fi
-	codesign --force --deep --sign - $(BUNDLE)
-	@echo "$(BUNDLE) ready"
+	codesign --force --deep --sign - $(BUILD_BUNDLE)
 
-open: app
+dev: build
 	-killall $(APP) 2>/dev/null; sleep 0.5
-	open $(BUNDLE)
+	/usr/bin/open $(BUILD_BUNDLE)
 
-build-zip: app
-	rm -f build/$(APP).zip
-	cd build && zip -r --symlinks $(APP).zip $(APP).app
-	@echo "build/$(APP).zip ready"
+publish:
+	swift build -c release
+	rm -rf $(BUILD_BUNDLE)
+	mkdir -p $(CONTENTS)/MacOS $(CONTENTS)/Resources
+	cp .build/release/$(APP) $(CONTENTS)/MacOS/$(APP)
+	cp Info.plist $(CONTENTS)/
+	@if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns $(CONTENTS)/Resources/; fi
+	codesign --force --deep --sign - $(BUILD_BUNDLE)
 
-clean:
+install: publish
+	cp -r $(BUILD_BUNDLE) /Applications/
+
+close:
+	-killall $(APP) 2>/dev/null
+
+uninstall: close
+	rm -rf $(INSTALL_BUNDLE)
+
+open:
+	@if [ ! -d "$(INSTALL_BUNDLE)" ]; then $(MAKE) install; fi
+	/usr/bin/open $(INSTALL_BUNDLE)
+
+reinstall-open: publish
+	-killall $(APP) 2>/dev/null; sleep 0.5
+	rm -rf $(INSTALL_BUNDLE)
+	cp -r $(BUILD_BUNDLE) /Applications/
+	/usr/bin/open $(INSTALL_BUNDLE)
+
+clean: uninstall
 	rm -rf .build build
-
-clean-cache:
 	rm -rf "$(CACHE_DIR)"
-	@echo "Cache cleared"
+
+reinstall: uninstall install
