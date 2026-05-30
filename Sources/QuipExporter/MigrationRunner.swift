@@ -103,7 +103,7 @@ private func run(
     for fid in rootIds {
         if Task.isCancelled { break }
         await migrateFolder(
-            folderId: fid, notesPath: ["From Quip"],
+            folderId: fid, notesPath: ["From Quip"], mdPath: ["From Quip"],
             client: client, notesWriter: notesWriter, markdownWriter: markdownWriter,
             blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, trashFolderId: trashFolderId,
@@ -115,9 +115,12 @@ private func run(
     await log("Done. Migrated \(visitedThreads.count) documents across \(visitedFolders.count) folders.", .info)
 }
 
+private let skippedInNotes: Set<String> = ["Desktop", "Starred", "Private"]
+
 private func migrateFolder(
     folderId: String,
     notesPath: [String],
+    mdPath: [String],
     client: QuipClient,
     notesWriter: NotesWriter?,
     markdownWriter: MarkdownWriter?,
@@ -137,19 +140,24 @@ private func migrateFolder(
         await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error); return
     }
 
-    let folderPath = notesPath + [data.folder.title]
-    await log("Folder: \(folderPath.joined(separator: " / "))", .info)
+    let folderTitle = data.folder.title
+    let nextMdPath = mdPath + [folderTitle]
+    let nextNotesPath = (notesWriter != nil && skippedInNotes.contains(folderTitle))
+        ? notesPath
+        : notesPath + [folderTitle]
+
+    await log("Folder: \(nextMdPath.joined(separator: " / "))", .info)
 
     var notesFolderId: String? = nil
     var markdownDir: URL? = nil
 
     if let nw = notesWriter {
-        do { notesFolderId = try nw.getOrCreateFolder(path: folderPath) } catch {
+        do { notesFolderId = try nw.getOrCreateFolder(path: nextNotesPath) } catch {
             await log("Failed to create Notes folder: \(error.localizedDescription)", .error); return
         }
     }
     if let mw = markdownWriter {
-        do { markdownDir = try mw.ensureFolder(path: folderPath) } catch {
+        do { markdownDir = try mw.ensureFolder(path: nextMdPath) } catch {
             await log("Failed to create output folder: \(error.localizedDescription)", .error); return
         }
     }
@@ -158,7 +166,7 @@ private func migrateFolder(
         if Task.isCancelled { break }
         if let threadId = child.threadId {
             await migrateThread(
-                threadId: threadId, notesPath: folderPath,
+                threadId: threadId, notesPath: nextMdPath,
                 notesFolderId: notesFolderId, markdownDir: markdownDir,
                 client: client, notesWriter: notesWriter, markdownWriter: markdownWriter,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
@@ -167,7 +175,7 @@ private func migrateFolder(
             )
         } else if let childId = child.folderId {
             await migrateFolder(
-                folderId: childId, notesPath: folderPath,
+                folderId: childId, notesPath: nextNotesPath, mdPath: nextMdPath,
                 client: client, notesWriter: notesWriter, markdownWriter: markdownWriter,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
@@ -232,11 +240,10 @@ private func migrateThread(
             + linkLine + "<hr/>" + html + "</body></html>"
 
         do {
-            if try nw.noteExists(title: noteTitle, folderId: folderId) {
+            if try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr) {
                 await log("  [skipped]  \(noteTitle)", .info); return
             }
             try nw.createNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId)
-            await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
         }
@@ -246,16 +253,19 @@ private func migrateThread(
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
                 let trashedTitle = "\(noteTitle) (Trashed in Quip)"
                 try nw.renameNote(oldTitle: noteTitle, newTitle: trashedTitle, folderId: folderId)
-                await log("  [trashed]  \(trashedTitle)", .info)
+                await log("  [copied + trashed]  \(noteTitle)  (created \(createdStr))", .info)
             } catch {
+                await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
             }
+        } else {
+            await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
         }
     }
 
     // --- Markdown path ---
     if let mw = markdownWriter, let dir = markdownDir {
-        if mw.noteExists(title: noteTitle, dir: dir) {
+        if mw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr) {
             await log("  [skipped]  \(noteTitle)", .info); return
         }
 
@@ -269,7 +279,6 @@ private func migrateThread(
         do {
             try mw.writeNote(title: noteTitle, html: processedHtml, dir: dir,
                              quipLink: quipLink, createdStr: createdStr, folderPath: notesPath)
-            await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
         }
@@ -277,10 +286,13 @@ private func migrateThread(
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
-                await log("  [trashed]  \(noteTitle) in Quip", .info)
+                await log("  [copied + trashed]  \(noteTitle)  (created \(createdStr))", .info)
             } catch {
+                await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
             }
+        } else {
+            await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
         }
     }
 }

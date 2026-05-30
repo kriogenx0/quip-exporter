@@ -148,7 +148,7 @@ struct MigrationInfoBanner: View {
         switch destination {
         case .appleNotes:
             let account = notesAccount.isEmpty ? "your default Notes account" : "the \"\(notesAccount)\" account"
-            parts.append("Copies documents from your Quip account (Desktop, Starred, and Shared folders) into \(account) under a top-level \"From Quip\" folder, preserving the folder hierarchy.")
+            parts.append("Copies documents from your Quip account (Desktop, Starred, and Shared folders) into \(account) under a top-level \"From Quip\" folder, preserving the folder hierarchy. Desktop, Starred, and Private folders are flattened into the root.")
         case .markdown:
             let folder = markdownOutputDir.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
             parts.append("Exports documents from your Quip account (Desktop, Starred, and Shared folders) as Markdown files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder.")

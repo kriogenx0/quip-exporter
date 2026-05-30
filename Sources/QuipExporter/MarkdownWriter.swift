@@ -10,8 +10,10 @@ struct MarkdownWriter {
         return dir
     }
 
-    func noteExists(title: String, dir: URL) -> Bool {
-        FileManager.default.fileExists(atPath: dir.appendingPathComponent(sanitize(title) + ".md").path)
+    func noteExists(title: String, dir: URL, createdStr: String) -> Bool {
+        let file = dir.appendingPathComponent(sanitize(title) + ".md")
+        guard let content = try? String(contentsOf: file, encoding: .utf8) else { return false }
+        return content.hasPrefix("---") && content.contains("\ncreated: \(createdStr)\n")
     }
 
     func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
