@@ -74,11 +74,15 @@ end tell
 """)
     }
 
-    func noteExists(title: String, folderId: String) throws -> Bool {
+    func noteExists(title: String, folderId: String, createdStr: String) throws -> Bool {
         try run("""
 tell application "Notes"
     set theFolder to folder id "\(esc(folderId))" of \(accountRef)
-    return (count of (every note of theFolder whose name is "\(esc(title))")) > 0
+    set matchNotes to every note of theFolder whose name is "\(esc(title))"
+    repeat with n in matchNotes
+        if body of n contains "Created in Quip: \(esc(createdStr))" then return true
+    end repeat
+    return false
 end tell
 """) == "true"
     }
