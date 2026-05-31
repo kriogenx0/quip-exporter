@@ -107,25 +107,86 @@ end tell
     }
 
     func buildHTML(html: String, noteTitle: String, createdStr: String, folderDisplay: String, quipLink: String) -> String {
-        var body = stripListParagraphs(html)
+        var body = html
+        body = convertChecklists(body)
+        body = stripListNoise(body)
+        body = addHeadingBreaks(body)
         let linkLine = quipLink.isEmpty ? "" :
             "<p><em>Quip Link: <a href=\"\(escHTML(quipLink))\">\(escHTML(quipLink))</a></em></p>"
-        return "<html><head><style>li{margin:0}li p{margin:0}ul,ol{margin:0}</style></head><body>"
+        return "<html><head><style>li{margin:0;padding:0}li p{margin:0;padding:0}ul,ol{margin:0;padding:0 0 0 1.5em}</style></head><body>"
             + "<h1>\(escHTML(noteTitle))</h1>"
             + "<p><em>Created in Quip: \(createdStr)</em></p>"
             + "<p><em>From Quip Folder: \(escHTML(folderDisplay))</em></p>"
             + linkLine + "<hr/>" + body + "</body></html>"
     }
 
-    private func stripListParagraphs(_ html: String) -> String {
+    // Converts Quip checklist <ul> elements to Apple Notes checklist format.
+    private func convertChecklists(_ html: String) -> String {
         var s = html
-        s = (try? NSRegularExpression(pattern: #"<li[^>]*>\s*<p[^>]*>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<li>") ?? s
+        s = (try? NSRegularExpression(
+            pattern: #"<ul[^>]*class="[^"]*\b(?:checklist|checkmark|list-check\w*|todo)\b[^"]*"[^>]*>"#,
+            options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s),
+                                      withTemplate: #"<ul class="Apple-Note-Checklist-List">"#) ?? s
+        s = (try? NSRegularExpression(pattern: #"<li[^>]*\bchecked\b[^>]*>"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s),
+                                      withTemplate: #"<li class="Apple-Note-Checklist-List-Item-Checked">"#) ?? s
+        return markUncheckedChecklistItems(s)
+    }
+
+    // Scans for Apple Notes checklist <ul> blocks and converts any unconverted <li> to unchecked.
+    private func markUncheckedChecklistItems(_ html: String) -> String {
+        let open = #"<ul class="Apple-Note-Checklist-List">"#
+        let close = "</ul>"
+        var result = ""
+        var remaining = html[...]
+        while let r = remaining.range(of: open, options: .caseInsensitive) {
+            result += remaining[..<r.lowerBound]
+            result += open
+            remaining = remaining[r.upperBound...]
+            guard let c = remaining.range(of: close, options: .caseInsensitive) else {
+                result += remaining; return result
+            }
+            var inner = String(remaining[..<c.lowerBound])
+            inner = (try? NSRegularExpression(
+                pattern: #"<li(?![^>]*Apple-Note-Checklist-List-Item)[^>]*>"#,
+                options: .caseInsensitive))?
+                .stringByReplacingMatches(in: inner, range: NSRange(inner.startIndex..., in: inner),
+                                          withTemplate: #"<li class="Apple-Note-Checklist-List-Item-Unchecked">"#) ?? inner
+            result += inner + close
+            remaining = remaining[c.upperBound...]
+        }
+        result += remaining
+        return result
+    }
+
+    private func stripListNoise(_ html: String) -> String {
+        var s = html
+        // Remove <p> wrappers inside <li>, preserving <li> attributes
+        s = (try? NSRegularExpression(pattern: #"(<li[^>]*>)\s*<p[^>]*>"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "$1") ?? s
         s = (try? NSRegularExpression(pattern: #"</p>\s*</li>"#, options: .caseInsensitive))?
             .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
+        // Remove trailing <br> before </li> and any <br> between items
         s = (try? NSRegularExpression(pattern: #"<br\s*/?>\s*</li>"#, options: .caseInsensitive))?
             .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
+        s = (try? NSRegularExpression(pattern: #"</li>\s*(?:<br\s*/?>\s*)*<li"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li><li") ?? s
+        // Merge consecutive regular <ul> blocks (Quip wraps each bullet item in its own <ul>)
+        s = (try? NSRegularExpression(pattern: #"</ul>\s*<ul(?![^>]*Apple-Note-Checklist)[^>]*>"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "") ?? s
+        // Merge consecutive Apple Notes checklist <ul> blocks
+        s = (try? NSRegularExpression(pattern: #"</ul>\s*<ul class="Apple-Note-Checklist-List">"#))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "") ?? s
+        s = (try? NSRegularExpression(pattern: #"</ol>\s*<ol[^>]*>"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "") ?? s
         return s
+    }
+
+    private func addHeadingBreaks(_ html: String) -> String {
+        return (try? NSRegularExpression(pattern: #"(<h[1-6][^>]*>)"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: html, range: NSRange(html.startIndex..., in: html),
+                                      withTemplate: "<br>$1") ?? html
     }
 
     private func escHTML(_ s: String) -> String {
