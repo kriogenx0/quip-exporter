@@ -229,6 +229,7 @@ private func migrateThread(
     if let nw = notesWriter, let folderId = notesFolderId {
         var html = await inlineImages(html: rawHtml, threadId: threadId, client: client, blobCache: blobCache, log: log)
         html = stripLeadingHeading(html: html, title: title)
+        html = stripListParagraphs(html)
 
         let linkLine = quipLink.isEmpty ? "" :
             "<p><em>Quip Link: <a href=\"\(escHtml(quipLink))\">\(escHtml(quipLink))</a></em></p>"
@@ -380,6 +381,15 @@ private func resolveImagesForMarkdown(
     await replaceBlobSrcs(in: html, client: client, blobCache: blobCache, log: log) { data, hash in
         try markdownWriter.saveImage(data: data, blobHash: hash, dir: dir)
     }
+}
+
+private func stripListParagraphs(_ html: String) -> String {
+    var s = html
+    s = (try? NSRegularExpression(pattern: #"<li[^>]*>\s*<p[^>]*>"#, options: .caseInsensitive))?
+        .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<li>") ?? s
+    s = (try? NSRegularExpression(pattern: #"</p>\s*</li>"#, options: .caseInsensitive))?
+        .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
+    return s
 }
 
 private func escHtml(_ s: String) -> String {
