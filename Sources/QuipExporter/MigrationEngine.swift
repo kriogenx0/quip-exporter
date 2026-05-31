@@ -6,6 +6,7 @@ func run(
     deleteAfterCopy: Bool,
     notesAccount: String,
     markdownOutputDir: URL?,
+    htmlOutputDir: URL?,
     blobCache: URL,
     log: (String, LogEntry.Level) async -> Void
 ) async {
@@ -23,6 +24,7 @@ func run(
 
     let notesWriter = destination == .appleNotes ? NotesWriter(account: notesAccount) : nil
     let markdownWriter = destination == .markdown ? markdownOutputDir.map { MarkdownWriter(outputDir: $0) } : nil
+    let htmlWriter = destination == .html ? htmlOutputDir.map { HTMLWriter(outputDir: $0) } : nil
 
     if let nw = notesWriter {
         do { _ = try nw.getOrCreateFolder(path: ["From Quip"]) } catch {
@@ -37,6 +39,14 @@ func run(
             await log("Failed to create output folder: \(error.localizedDescription)", .error); return
         }
     }
+    if let hw = htmlWriter {
+        do {
+            try FileManager.default.createDirectory(at: hw.outputDir.appendingPathComponent("From Quip"),
+                                                    withIntermediateDirectories: true)
+        } catch {
+            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
+        }
+    }
 
     var visitedFolders = Set<String>()
     var visitedThreads = Set<String>()
@@ -45,7 +55,7 @@ func run(
         if Task.isCancelled { break }
         await migrateFolder(
             folderId: fid, notesPath: ["From Quip"], mdPath: ["From Quip"],
-            client: client, notesWriter: notesWriter, markdownWriter: markdownWriter,
+            client: client, notesWriter: notesWriter, markdownWriter: markdownWriter, htmlWriter: htmlWriter,
             blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, trashFolderId: trashFolderId,
             visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
@@ -67,6 +77,7 @@ private func migrateFolder(
     client: QuipClient,
     notesWriter: NotesWriter?,
     markdownWriter: MarkdownWriter?,
+    htmlWriter: HTMLWriter?,
     blobCache: URL,
     deleteAfterCopy: Bool,
     currentUserId: String,
@@ -93,6 +104,7 @@ private func migrateFolder(
 
     var notesFolderId: String? = nil
     var markdownDir: URL? = nil
+    var htmlDir: URL? = nil
 
     if let nw = notesWriter {
         do { notesFolderId = try nw.getOrCreateFolder(path: nextNotesPath) } catch {
@@ -104,14 +116,19 @@ private func migrateFolder(
             await log("Failed to create output folder: \(error.localizedDescription)", .error); return
         }
     }
+    if let hw = htmlWriter {
+        do { htmlDir = try hw.ensureFolder(path: nextMdPath) } catch {
+            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
+        }
+    }
 
     for child in data.children {
         if Task.isCancelled { break }
         if let threadId = child.threadId {
             await migrateThread(
                 threadId: threadId, notesPath: nextMdPath,
-                notesFolderId: notesFolderId, markdownDir: markdownDir,
-                client: client, notesWriter: notesWriter, markdownWriter: markdownWriter,
+                notesFolderId: notesFolderId, markdownDir: markdownDir, htmlDir: htmlDir,
+                client: client, notesWriter: notesWriter, markdownWriter: markdownWriter, htmlWriter: htmlWriter,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
                 visited: &visitedThreads, log: log
@@ -119,7 +136,7 @@ private func migrateFolder(
         } else if let childId = child.folderId {
             await migrateFolder(
                 folderId: childId, notesPath: nextNotesPath, mdPath: nextMdPath,
-                client: client, notesWriter: notesWriter, markdownWriter: markdownWriter,
+                client: client, notesWriter: notesWriter, markdownWriter: markdownWriter, htmlWriter: htmlWriter,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
                 visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
@@ -134,9 +151,11 @@ private func migrateThread(
     notesPath: [String],
     notesFolderId: String?,
     markdownDir: URL?,
+    htmlDir: URL?,
     client: QuipClient,
     notesWriter: NotesWriter?,
     markdownWriter: MarkdownWriter?,
+    htmlWriter: HTMLWriter?,
     blobCache: URL,
     deleteAfterCopy: Bool,
     currentUserId: String,
@@ -214,6 +233,38 @@ private func migrateThread(
 
         do {
             try mw.writeNote(title: noteTitle, html: processedHtml, dir: dir,
+                             quipLink: quipLink, createdStr: createdStr, folderPath: notesPath)
+        } catch {
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+        }
+
+        if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
+            do {
+                try await client.trashThread(threadId, trashFolderId: trashFolderId)
+                await log("  [copied + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+            } catch {
+                await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
+                await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
+            }
+        } else {
+            await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
+        }
+    }
+
+    // --- HTML path ---
+    if let hw = htmlWriter, let dir = htmlDir {
+        if hw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr) {
+            await log("  [skipped]  \(noteTitle)", .info); return
+        }
+
+        let resolvedHtml = await resolveImagesForHTML(
+            html: rawHtml, threadId: threadId, client: client,
+            blobCache: blobCache, dir: dir, htmlWriter: hw, log: log
+        )
+        let processedHtml = stripLeadingHeading(html: resolvedHtml, title: title)
+
+        do {
+            try hw.writeNote(title: noteTitle, html: processedHtml, dir: dir,
                              quipLink: quipLink, createdStr: createdStr, folderPath: notesPath)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
@@ -315,5 +366,15 @@ private func resolveImagesForMarkdown(
 ) async -> String {
     await replaceBlobSrcs(in: html, client: client, blobCache: blobCache, log: log) { data, hash in
         try markdownWriter.saveImage(data: data, blobHash: hash, dir: dir)
+    }
+}
+
+private func resolveImagesForHTML(
+    html: String, threadId: String, client: QuipClient, blobCache: URL,
+    dir: URL, htmlWriter: HTMLWriter,
+    log: (String, LogEntry.Level) async -> Void
+) async -> String {
+    await replaceBlobSrcs(in: html, client: client, blobCache: blobCache, log: log) { data, hash in
+        try htmlWriter.saveImage(data: data, blobHash: hash, dir: dir)
     }
 }

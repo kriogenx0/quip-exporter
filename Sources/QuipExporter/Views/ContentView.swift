@@ -7,6 +7,7 @@ struct ContentView: View {
     @AppStorage("deleteAfterCopy") private var deleteAfterCopy = false
     @AppStorage("notesAccount") private var notesAccount = ""
     @State private var markdownOutputDir: URL? = nil
+    @State private var htmlOutputDir: URL? = nil
 
     @StateObject private var runner = MigrationRunner()
 
@@ -19,12 +20,14 @@ struct ContentView: View {
                 deleteAfterCopy: $deleteAfterCopy,
                 notesAccount: $notesAccount,
                 markdownOutputDir: $markdownOutputDir,
+                htmlOutputDir: $htmlOutputDir,
                 isRunning: runner.isRunning
             )
             .fixedSize(horizontal: false, vertical: true)
 
             MigrationInfoBanner(destination: destination, deleteAfterCopy: deleteAfterCopy,
-                                notesAccount: notesAccount, markdownOutputDir: markdownOutputDir)
+                                notesAccount: notesAccount, markdownOutputDir: markdownOutputDir,
+                                htmlOutputDir: htmlOutputDir)
 
             Divider()
 
@@ -39,7 +42,8 @@ struct ContentView: View {
                 destination: destination,
                 deleteAfterCopy: deleteAfterCopy,
                 notesAccount: notesAccount,
-                markdownOutputDir: markdownOutputDir
+                markdownOutputDir: markdownOutputDir,
+                htmlOutputDir: htmlOutputDir
             )
         }
         .frame(minWidth: 650, minHeight: 550)
@@ -55,6 +59,7 @@ struct SettingsPanel: View {
     @Binding var deleteAfterCopy: Bool
     @Binding var notesAccount: String
     @Binding var markdownOutputDir: URL?
+    @Binding var htmlOutputDir: URL?
     let isRunning: Bool
     @State private var showToken = false
 
@@ -107,11 +112,12 @@ struct SettingsPanel: View {
                     .fixedSize()
                 }
 
-                if destination == .markdown {
+                if destination == .markdown || destination == .html {
                     LabeledContent("Output Folder") {
                         HStack {
-                            Text(markdownOutputDir?.path ?? "Not selected")
-                                .foregroundStyle(markdownOutputDir == nil ? .secondary : .primary)
+                            let dir = destination == .markdown ? markdownOutputDir : htmlOutputDir
+                            Text(dir?.path ?? "Not selected")
+                                .foregroundStyle(dir == nil ? .secondary : .primary)
                                 .truncationMode(.middle)
                                 .lineLimit(1)
                             Button("Choose…") {
@@ -119,7 +125,10 @@ struct SettingsPanel: View {
                                 panel.canChooseFiles = false
                                 panel.canChooseDirectories = true
                                 panel.canCreateDirectories = true
-                                if panel.runModal() == .OK { markdownOutputDir = panel.url }
+                                if panel.runModal() == .OK {
+                                    if destination == .markdown { markdownOutputDir = panel.url }
+                                    else { htmlOutputDir = panel.url }
+                                }
                             }
                         }
                     }
@@ -141,6 +150,7 @@ struct MigrationInfoBanner: View {
     let deleteAfterCopy: Bool
     let notesAccount: String
     let markdownOutputDir: URL?
+    let htmlOutputDir: URL?
 
     private var description: String {
         var parts: [String] = []
@@ -152,6 +162,9 @@ struct MigrationInfoBanner: View {
         case .markdown:
             let folder = markdownOutputDir.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
             parts.append("Exports documents from your Quip account (Desktop, Starred, and Shared folders) as Markdown files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder.")
+        case .html:
+            let folder = htmlOutputDir.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
+            parts.append("Exports documents from your Quip account (Desktop, Starred, and Shared folders) as HTML files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder.")
         }
 
         if deleteAfterCopy {
@@ -194,10 +207,12 @@ struct ControlBar: View {
     let deleteAfterCopy: Bool
     let notesAccount: String
     let markdownOutputDir: URL?
+    let htmlOutputDir: URL?
 
     private var canStart: Bool {
         guard !quipToken.isEmpty else { return false }
         if destination == .markdown { return markdownOutputDir != nil }
+        if destination == .html { return htmlOutputDir != nil }
         return true
     }
 
@@ -231,7 +246,8 @@ struct ControlBar: View {
                         deleteAfterCopy: deleteAfterCopy,
                         rateDelay: 0.5,
                         notesAccount: notesAccount,
-                        markdownOutputDir: markdownOutputDir
+                        markdownOutputDir: markdownOutputDir,
+                        htmlOutputDir: htmlOutputDir
                     )
                 } label: {
                     Label("Start Exporting", systemImage: "arrow.down.circle.fill")
