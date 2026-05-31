@@ -177,7 +177,7 @@ private func migrateThread(
         let linkLine = quipLink.isEmpty ? "" :
             "<p><em>Quip Link: <a href=\"\(escHtml(quipLink))\">\(escHtml(quipLink))</a></em></p>"
         let folderDisplay = notesPath.dropFirst().joined(separator: " / ")
-        let fullHtml = "<html><body>"
+        let fullHtml = "<html><head><style>li{margin:0}li p{margin:0}ul,ol{margin:0}</style></head><body>"
             + "<h1>\(escHtml(noteTitle))</h1>"
             + "<p><em>Created in Quip: \(createdStr)</em></p>"
             + "<p><em>From Quip Folder: \(escHtml(folderDisplay))</em></p>"
@@ -269,6 +269,9 @@ private func stripListParagraphs(_ html: String) -> String {
     s = (try? NSRegularExpression(pattern: #"<li[^>]*>\s*<p[^>]*>"#, options: .caseInsensitive))?
         .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<li>") ?? s
     s = (try? NSRegularExpression(pattern: #"</p>\s*</li>"#, options: .caseInsensitive))?
+        .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
+    // Strip trailing <br> before </li> that Quip appends to each list item
+    s = (try? NSRegularExpression(pattern: #"<br\s*/?>\s*</li>"#, options: .caseInsensitive))?
         .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
     return s
 }
