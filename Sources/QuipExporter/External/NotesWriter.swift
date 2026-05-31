@@ -175,14 +175,20 @@ end tell
             .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
         s = (try? NSRegularExpression(pattern: #"</li>\s*(?:<br\s*/?>\s*)*<li"#, options: .caseInsensitive))?
             .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li><li") ?? s
-        // Merge consecutive regular <ul> blocks (Quip wraps each bullet item in its own <ul>)
-        s = (try? NSRegularExpression(pattern: #"</ul>\s*(?:<br\s*/?>\s*)*<ul(?![^>]*Apple-Note-Checklist)[^>]*>"#, options: .caseInsensitive))?
+        // Strip Quip-specific attributes from <ol> so Apple Notes renders it as a numbered list
+        s = (try? NSRegularExpression(pattern: #"<ol[^>]+>"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<ol>") ?? s
+        // Strip attributes from non-checklist <ul> (preserve Apple-Note-Checklist-List class)
+        s = (try? NSRegularExpression(pattern: #"<ul(?![^>]*Apple-Note-Checklist)[^>]+>"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<ul>") ?? s
+        // Handle Quip's pattern of each item being wrapped in <div class="line"><ul/ol>...</div>
+        s = (try? NSRegularExpression(pattern: #"</ul>\s*(?:</div>\s*<div[^>]*>\s*)?(?:<br\s*/?>\s*)*<ul>"#, options: .caseInsensitive))?
             .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "") ?? s
         // Merge consecutive Apple Notes checklist <ul> blocks
-        s = (try? NSRegularExpression(pattern: #"</ul>\s*(?:<br\s*/?>\s*)*<ul class="Apple-Note-Checklist-List">"#))?
+        s = (try? NSRegularExpression(pattern: #"</ul>\s*<ul class="Apple-Note-Checklist-List">"#))?
             .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "") ?? s
-        // Merge consecutive <ol> blocks (Quip wraps each numbered item in its own <ol>)
-        s = (try? NSRegularExpression(pattern: #"</ol>\s*(?:<br\s*/?>\s*)*<ol[^>]*>"#, options: .caseInsensitive))?
+        // Merge consecutive <ol> blocks (handles both simple and div-wrapped patterns)
+        s = (try? NSRegularExpression(pattern: #"</ol>\s*(?:</div>\s*<div[^>]*>\s*)?(?:<br\s*/?>\s*)*<ol>"#, options: .caseInsensitive))?
             .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "") ?? s
         return s
     }

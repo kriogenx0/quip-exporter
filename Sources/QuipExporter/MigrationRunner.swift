@@ -19,7 +19,8 @@ class MigrationRunner: ObservableObject {
         deleteAfterCopy: Bool,
         rateDelay: Double,
         notesAccount: String,
-        markdownOutputDir: URL?
+        markdownOutputDir: URL?,
+        htmlOutputDir: URL?
     ) {
         guard !isRunning else { return }
         isRunning = true
@@ -41,6 +42,7 @@ class MigrationRunner: ObservableObject {
                 deleteAfterCopy: deleteAfterCopy,
                 notesAccount: notesAccount,
                 markdownOutputDir: markdownOutputDir,
+                htmlOutputDir: htmlOutputDir,
                 blobCache: blobCache,
                 log: log
             )

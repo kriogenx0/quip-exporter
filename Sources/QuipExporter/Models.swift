@@ -12,6 +12,7 @@ struct LogEntry: Identifiable {
 enum ExportDestination: String, CaseIterable, Identifiable {
     case appleNotes = "Apple Notes"
     case markdown = "Markdown Files"
+    case html = "HTML Files"
     var id: String { rawValue }
 }
 
