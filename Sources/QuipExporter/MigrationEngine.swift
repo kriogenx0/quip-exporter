@@ -172,16 +172,9 @@ private func migrateThread(
     if let nw = notesWriter, let folderId = notesFolderId {
         var html = await inlineImages(html: rawHtml, threadId: threadId, client: client, blobCache: blobCache, log: log)
         html = stripLeadingHeading(html: html, title: title)
-        html = stripListParagraphs(html)
-
-        let linkLine = quipLink.isEmpty ? "" :
-            "<p><em>Quip Link: <a href=\"\(escHtml(quipLink))\">\(escHtml(quipLink))</a></em></p>"
         let folderDisplay = notesPath.dropFirst().joined(separator: " / ")
-        let fullHtml = "<html><head><style>li{margin:0}li p{margin:0}ul,ol{margin:0}</style></head><body>"
-            + "<h1>\(escHtml(noteTitle))</h1>"
-            + "<p><em>Created in Quip: \(createdStr)</em></p>"
-            + "<p><em>From Quip Folder: \(escHtml(folderDisplay))</em></p>"
-            + linkLine + "<hr/>" + html + "</body></html>"
+        let fullHtml = nw.buildHTML(html: html, noteTitle: noteTitle, createdStr: createdStr,
+                                    folderDisplay: folderDisplay, quipLink: quipLink)
 
         do {
             if try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr) {
@@ -264,18 +257,6 @@ private func stripLeadingHeading(html: String, title: String) -> String {
     return String(html[fullRange.upperBound...])
 }
 
-private func stripListParagraphs(_ html: String) -> String {
-    var s = html
-    s = (try? NSRegularExpression(pattern: #"<li[^>]*>\s*<p[^>]*>"#, options: .caseInsensitive))?
-        .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<li>") ?? s
-    s = (try? NSRegularExpression(pattern: #"</p>\s*</li>"#, options: .caseInsensitive))?
-        .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
-    // Strip trailing <br> before </li> that Quip appends to each list item
-    s = (try? NSRegularExpression(pattern: #"<br\s*/?>\s*</li>"#, options: .caseInsensitive))?
-        .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
-    return s
-}
-
 private func fetchBlob(threadId: String, blobHash: String, client: QuipClient, blobCache: URL) async throws -> Data {
     let cacheFile = blobCache.appendingPathComponent(threadId).appendingPathComponent(blobHash)
     if let cached = try? Data(contentsOf: cacheFile) { return cached }
@@ -335,11 +316,4 @@ private func resolveImagesForMarkdown(
     await replaceBlobSrcs(in: html, client: client, blobCache: blobCache, log: log) { data, hash in
         try markdownWriter.saveImage(data: data, blobHash: hash, dir: dir)
     }
-}
-
-private func escHtml(_ s: String) -> String {
-    s.replacingOccurrences(of: "&", with: "&amp;")
-     .replacingOccurrences(of: "<", with: "&lt;")
-     .replacingOccurrences(of: ">", with: "&gt;")
-     .replacingOccurrences(of: "\"", with: "&quot;")
 }

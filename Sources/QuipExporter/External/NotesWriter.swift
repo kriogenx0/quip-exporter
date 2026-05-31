@@ -105,4 +105,33 @@ tell application "Notes"
 end tell
 """)
     }
+
+    func buildHTML(html: String, noteTitle: String, createdStr: String, folderDisplay: String, quipLink: String) -> String {
+        var body = stripListParagraphs(html)
+        let linkLine = quipLink.isEmpty ? "" :
+            "<p><em>Quip Link: <a href=\"\(escHTML(quipLink))\">\(escHTML(quipLink))</a></em></p>"
+        return "<html><head><style>li{margin:0}li p{margin:0}ul,ol{margin:0}</style></head><body>"
+            + "<h1>\(escHTML(noteTitle))</h1>"
+            + "<p><em>Created in Quip: \(createdStr)</em></p>"
+            + "<p><em>From Quip Folder: \(escHTML(folderDisplay))</em></p>"
+            + linkLine + "<hr/>" + body + "</body></html>"
+    }
+
+    private func stripListParagraphs(_ html: String) -> String {
+        var s = html
+        s = (try? NSRegularExpression(pattern: #"<li[^>]*>\s*<p[^>]*>"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<li>") ?? s
+        s = (try? NSRegularExpression(pattern: #"</p>\s*</li>"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
+        s = (try? NSRegularExpression(pattern: #"<br\s*/?>\s*</li>"#, options: .caseInsensitive))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
+        return s
+    }
+
+    private func escHTML(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+         .replacingOccurrences(of: "<", with: "&lt;")
+         .replacingOccurrences(of: ">", with: "&gt;")
+         .replacingOccurrences(of: "\"", with: "&quot;")
+    }
 }
