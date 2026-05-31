@@ -15,8 +15,10 @@ build:
 	@if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns $(CONTENTS)/Resources/; fi
 	codesign --force --deep --sign - $(BUILD_BUNDLE)
 
-dev: build
+dev:
 	-killall $(APP) 2>/dev/null; sleep 0.5
+	rm -rf $(BUILD_BUNDLE)
+	$(MAKE) build
 	/usr/bin/open $(BUILD_BUNDLE)
 
 publish:
