@@ -39,7 +39,7 @@ if let raw = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDe
     tinted.unlockFocus()
 
     let symRect = NSRect(
-        x: (size.width  - raw.size.width)  / 2 + size.width * 0.02,
+        x: (size.width  - raw.size.width)  / 2 + size.width * 0.05,
         y: (size.height - raw.size.height) / 2,
         width:  raw.size.width,
         height: raw.size.height
