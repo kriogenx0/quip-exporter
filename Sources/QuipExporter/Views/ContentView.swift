@@ -231,6 +231,11 @@ struct ControlBar: View {
                 if !runner.isRunning && !runner.logEntries.isEmpty {
                     Button("Save Log") { saveLog() }
                 }
+                if !runner.isRunning && destination == .appleNotes {
+                    Button("Create Test Note") {
+                        runner.runFormattingTest(notesAccount: notesAccount)
+                    }
+                }
             }
 
             // Button centered independently

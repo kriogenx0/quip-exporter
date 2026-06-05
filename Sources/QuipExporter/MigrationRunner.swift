@@ -57,4 +57,35 @@ class MigrationRunner: ObservableObject {
         logEntries.append(LogEntry(message: "Migration stopped by user.", level: .warning))
         isRunning = false
     }
+
+    func runFormattingTest(notesAccount: String) {
+        guard !isRunning else { return }
+        isRunning = true
+        logEntries = []
+
+        migrationTask = Task.detached { [weak self] in
+            func log(_ msg: String, _ level: LogEntry.Level = .info) async {
+                let entry = LogEntry(message: msg, level: level)
+                guard let self else { return }
+                await MainActor.run { self.logEntries.append(entry) }
+            }
+
+            let writer = NotesWriter(account: notesAccount)
+            do {
+                let folderId = try writer.getOrCreateFolder(path: ["From Quip"])
+                await log("Creating test note…", .info)
+                let (sent, received) = try writer.runFormattingTest(folderId: folderId)
+                await log("── SENT HTML ──────────────────────────────────", .info)
+                await log(sent, .info)
+                await log("── RECEIVED HTML ──────────────────────────────", .info)
+                await log(received, .info)
+                await log("Test complete.", .info)
+            } catch {
+                await log("Test failed: \(error.localizedDescription)", .error)
+            }
+
+            guard let self else { return }
+            await MainActor.run { self.isRunning = false }
+        }
+    }
 }

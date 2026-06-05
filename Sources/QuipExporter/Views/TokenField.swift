@@ -5,14 +5,14 @@ struct TokenField: View {
     var isSecure: Bool
 
     var body: some View {
-        Group {
-            if isSecure {
-                SecureField("", text: $text)
-            } else {
-                TextField("", text: $text)
-            }
+        if isSecure {
+            SecureField("", text: $text)
+                .font(.system(.body, design: .monospaced))
+                .multilineTextAlignment(.leading)
+        } else {
+            TextField("", text: $text)
+                .font(.system(.body, design: .monospaced))
+                .multilineTextAlignment(.leading)
         }
-        .font(.system(.body, design: .monospaced))
-        .multilineTextAlignment(.leading)
     }
 }
