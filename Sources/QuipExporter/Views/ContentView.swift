@@ -134,6 +134,39 @@ struct SettingsPanel: View {
                     }
                 }
 
+                if destination == .ask {
+                    LabeledContent("Markdown Folder") {
+                        HStack {
+                            Text(markdownOutputDir?.path ?? "Not configured")
+                                .foregroundStyle(markdownOutputDir == nil ? .secondary : .primary)
+                                .truncationMode(.middle)
+                                .lineLimit(1)
+                            Button(markdownOutputDir == nil ? "Configure…" : "Change…") {
+                                let panel = NSOpenPanel()
+                                panel.canChooseFiles = false
+                                panel.canChooseDirectories = true
+                                panel.canCreateDirectories = true
+                                if panel.runModal() == .OK { markdownOutputDir = panel.url }
+                            }
+                        }
+                    }
+                    LabeledContent("HTML Folder") {
+                        HStack {
+                            Text(htmlOutputDir?.path ?? "Not configured")
+                                .foregroundStyle(htmlOutputDir == nil ? .secondary : .primary)
+                                .truncationMode(.middle)
+                                .lineLimit(1)
+                            Button(htmlOutputDir == nil ? "Configure…" : "Change…") {
+                                let panel = NSOpenPanel()
+                                panel.canChooseFiles = false
+                                panel.canChooseDirectories = true
+                                panel.canCreateDirectories = true
+                                if panel.runModal() == .OK { htmlOutputDir = panel.url }
+                            }
+                        }
+                    }
+                }
+
                 Toggle("Delete private Quip documents after copying", isOn: $deleteAfterCopy)
             }
         }
@@ -165,13 +198,17 @@ struct MigrationInfoBanner: View {
         case .html:
             let folder = htmlOutputDir.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
             parts.append("Exports documents from your Quip account (Desktop, Starred, and Shared folders) as HTML files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder.")
+        case .ask:
+            parts.append("For each document, asks where to export it: Apple Notes, Markdown, or HTML. Configure the Markdown and HTML folders above to enable those options in the dialog.")
         }
 
         if deleteAfterCopy {
             parts.append("Private (unshared) documents will be moved to Quip Trash after copying.")
         }
 
-        parts.append("Already-exported documents are skipped on re-runs.")
+        if destination != .ask {
+            parts.append("Already-exported documents are skipped on re-runs.")
+        }
 
         return parts.joined(separator: " ")
     }
