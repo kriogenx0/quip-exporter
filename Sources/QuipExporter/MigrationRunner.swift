@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 @MainActor
 class MigrationRunner: ObservableObject {
@@ -36,6 +37,45 @@ class MigrationRunner: ObservableObject {
                 await MainActor.run { self.logEntries.append(entry) }
             }
 
+            let confirm: ((String, [String]) async -> ExportDestination?)?
+            if destination == .ask {
+                let hasMarkdown = markdownOutputDir != nil
+                let hasHTML = htmlOutputDir != nil
+                confirm = { [weak self] title, path in
+                    await MainActor.run { [weak self] in
+                        let alert = NSAlert()
+                        alert.messageText = "Export \"\(title)\"?"
+                        let sub = path.count > 1 ? path.dropFirst().joined(separator: " / ") : "Root folder"
+                        alert.informativeText = sub
+                        // Build buttons in order; track which destination each maps to.
+                        var choices: [ExportDestination] = [.appleNotes]
+                        alert.addButton(withTitle: "Copy to Notes")
+                        if hasMarkdown {
+                            alert.addButton(withTitle: "Save as Markdown")
+                            choices.append(.markdown)
+                        }
+                        if hasHTML {
+                            alert.addButton(withTitle: "Save as HTML")
+                            choices.append(.html)
+                        }
+                        alert.addButton(withTitle: "Skip")
+                        alert.addButton(withTitle: "Stop")
+                        let response = alert.runModal()
+                        let idx = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+                        if idx < choices.count {
+                            return choices[idx]
+                        }
+                        // Skip button
+                        if idx == choices.count { return nil }
+                        // Stop button
+                        self?.stop()
+                        return nil
+                    }
+                }
+            } else {
+                confirm = nil
+            }
+
             await run(
                 client: client,
                 destination: destination,
@@ -44,6 +84,7 @@ class MigrationRunner: ObservableObject {
                 markdownOutputDir: markdownOutputDir,
                 htmlOutputDir: htmlOutputDir,
                 blobCache: blobCache,
+                confirm: confirm,
                 log: log
             )
             guard let self else { return }

@@ -8,6 +8,7 @@ func run(
     markdownOutputDir: URL?,
     htmlOutputDir: URL?,
     blobCache: URL,
+    confirm: ((String, [String]) async -> ExportDestination?)? = nil,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     await log("Fetching current user...", .info)
@@ -22,9 +23,12 @@ func run(
     let rootIds = ([user.desktopFolderId, user.starredFolderId].compactMap { $0 }
                    + (user.sharedFolderIds ?? []))
 
-    let notesWriter = destination == .appleNotes ? NotesWriter(account: notesAccount) : nil
-    let markdownWriter = destination == .markdown ? markdownOutputDir.map { MarkdownWriter(outputDir: $0) } : nil
-    let htmlWriter = destination == .html ? htmlOutputDir.map { HTMLWriter(outputDir: $0) } : nil
+    let notesWriter = (destination == .appleNotes || destination == .ask)
+        ? NotesWriter(account: notesAccount) : nil
+    let markdownWriter = (destination == .markdown || destination == .ask)
+        ? markdownOutputDir.map { MarkdownWriter(outputDir: $0) } : nil
+    let htmlWriter = (destination == .html || destination == .ask)
+        ? htmlOutputDir.map { HTMLWriter(outputDir: $0) } : nil
 
     if let nw = notesWriter {
         do { _ = try nw.getOrCreateFolder(path: ["From Quip"]) } catch {
@@ -59,7 +63,7 @@ func run(
             blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, trashFolderId: trashFolderId,
             visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-            log: log
+            confirm: confirm, log: log
         )
     }
 
@@ -84,6 +88,7 @@ private func migrateFolder(
     trashFolderId: String,
     visitedFolders: inout Set<String>,
     visitedThreads: inout Set<String>,
+    confirm: ((String, [String]) async -> ExportDestination?)?,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visitedFolders.contains(folderId), !Task.isCancelled else { return }
@@ -131,7 +136,7 @@ private func migrateFolder(
                 client: client, notesWriter: notesWriter, markdownWriter: markdownWriter, htmlWriter: htmlWriter,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
-                visited: &visitedThreads, log: log
+                visited: &visitedThreads, confirm: confirm, log: log
             )
         } else if let childId = child.folderId {
             await migrateFolder(
@@ -140,7 +145,7 @@ private func migrateFolder(
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
                 visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-                log: log
+                confirm: confirm, log: log
             )
         }
     }
@@ -161,6 +166,7 @@ private func migrateThread(
     currentUserId: String,
     trashFolderId: String,
     visited: inout Set<String>,
+    confirm: ((String, [String]) async -> ExportDestination?)?,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visited.contains(threadId), !Task.isCancelled else { return }
@@ -187,8 +193,18 @@ private func migrateThread(
     let shared = isShared(thread: thread, currentUserId: currentUserId)
     let noteTitle = shared ? title : "\(title) (Private)"
 
+    // In Ask mode, confirm returns which destination to use (nil = skip).
+    let chosenDest: ExportDestination?
+    if let confirm {
+        chosenDest = await confirm(title, notesPath)
+        guard chosenDest != nil, !Task.isCancelled else { return }
+    } else {
+        chosenDest = nil
+    }
+
     // --- Apple Notes path ---
-    if let nw = notesWriter, let folderId = notesFolderId {
+    if let nw = notesWriter, let folderId = notesFolderId,
+       (chosenDest == nil || chosenDest == .appleNotes) {
         var html = await inlineImages(html: rawHtml, threadId: threadId, client: client, blobCache: blobCache, log: log)
         html = stripLeadingHeading(html: html, title: title)
         let folderDisplay = notesPath.dropFirst().joined(separator: " / ")
@@ -196,7 +212,7 @@ private func migrateThread(
                                     folderDisplay: folderDisplay, quipLink: quipLink)
 
         do {
-            if try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr) {
+            if chosenDest == nil, try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr) {
                 await log("  [skipped]  \(noteTitle)", .info); return
             }
             try nw.createNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId)
@@ -220,8 +236,9 @@ private func migrateThread(
     }
 
     // --- Markdown path ---
-    if let mw = markdownWriter, let dir = markdownDir {
-        if mw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr) {
+    if let mw = markdownWriter, let dir = markdownDir,
+       (chosenDest == nil || chosenDest == .markdown) {
+        if chosenDest == nil && mw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr) {
             await log("  [skipped]  \(noteTitle)", .info); return
         }
 
@@ -252,8 +269,9 @@ private func migrateThread(
     }
 
     // --- HTML path ---
-    if let hw = htmlWriter, let dir = htmlDir {
-        if hw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr) {
+    if let hw = htmlWriter, let dir = htmlDir,
+       (chosenDest == nil || chosenDest == .html) {
+        if chosenDest == nil && hw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr) {
             await log("  [skipped]  \(noteTitle)", .info); return
         }
 

@@ -13,6 +13,7 @@ enum ExportDestination: String, CaseIterable, Identifiable {
     case appleNotes = "Apple Notes"
     case markdown = "Markdown Files"
     case html = "HTML Files"
+    case ask = "Ask"
     var id: String { rawValue }
 }
 
