@@ -13,26 +13,7 @@ struct NotesWriter {
     }
 
     private func run(_ script: String) throws -> String {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".applescript")
-        try script.write(to: tmp, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tmp) }
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        proc.arguments = [tmp.path]
-        let out = Pipe(), err = Pipe()
-        proc.standardOutput = out
-        proc.standardError = err
-        try proc.run()
-        proc.waitUntilExit()
-
-        if proc.terminationStatus != 0 {
-            let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            throw NotesError.applescript(msg.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        let raw = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        try AppleScriptRunner.run(script)
     }
 
     private func findOrCreateSteps(path: [String]) -> String {
@@ -94,6 +75,29 @@ end tell
 tell application "Notes"
     set theFolder to folder id "\(esc(folderId))" of \(accountRef)
     set htmlContent to do shell script "cat " & quoted form of "\(tmp.path)"
+    make new note at theFolder with properties {body:htmlContent}
+end tell
+""")
+    }
+
+    // Replaces the body of the existing note matched by noteExists' own criteria
+    // (same title, body containing the same "Created in Quip" marker).
+    func updateNote(title: String, htmlBody: String, folderId: String, createdStr: String) throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".html")
+        try htmlBody.write(to: tmp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        _ = try run("""
+tell application "Notes"
+    set theFolder to folder id "\(esc(folderId))" of \(accountRef)
+    set htmlContent to do shell script "cat " & quoted form of "\(tmp.path)"
+    set matchNotes to every note of theFolder whose name is "\(esc(title))"
+    repeat with n in matchNotes
+        if body of n contains "Created in Quip: \(esc(createdStr))" then
+            set body of n to htmlContent
+            return
+        end if
+    end repeat
     make new note at theFolder with properties {body:htmlContent}
 end tell
 """)
@@ -180,6 +184,7 @@ end tell
         body = convertBlockquotes(body)
         body = normalizeHeadings(body)
         body = convertHorizontalRules(body)
+        body = convertHighlights(body)
         let linkLine = quipLink.isEmpty ? "" :
             "<p><em>Quip Link: <a href=\"\(escHTML(quipLink))\">\(escHTML(quipLink))</a></em></p>"
         return "<html><head><style>li{margin:0;padding:0}li p{margin:0;padding:0}ul,ol{margin:0;padding:0 0 0 1.5em}</style></head><body>"
@@ -187,6 +192,31 @@ end tell
             + "<p><em>Created in Quip: \(createdStr)</em></p>"
             + "<p><em>From Quip Folder: \(escHTML(folderDisplay))</em></p>"
             + linkLine + "<hr/>" + body + "</body></html>"
+    }
+
+    // Apple Notes' body-setting API silently drops background-color spans (confirmed via
+    // runFormattingTest's round trip), but foreground text color does survive — so a
+    // Quip highlight is mirrored onto the text color as the closest visible substitute.
+    private func convertHighlights(_ html: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"<span([^>]*)style="([^"]*background-color:\s*(#[0-9a-fA-F]{3,8})[^"]*)"([^>]*)>"#,
+            options: .caseInsensitive) else { return html }
+        let ns = html as NSString
+        var result = ""
+        var last = 0
+        for match in regex.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
+            result += ns.substring(with: NSRange(location: last, length: match.range.location - last))
+            let before = ns.substring(with: match.range(at: 1))
+            let style = ns.substring(with: match.range(at: 2))
+            let color = ns.substring(with: match.range(at: 3))
+            let after = ns.substring(with: match.range(at: 4))
+            let hasOwnColor = style.replacingOccurrences(of: "background-color", with: "").contains("color:")
+            let newStyle = hasOwnColor ? style : "\(style);color:\(color)"
+            result += "<span\(before)style=\"\(newStyle)\"\(after)>"
+            last = match.range.location + match.range.length
+        }
+        result += ns.substring(from: last)
+        return result
     }
 
     // MARK: - Checklist conversion
