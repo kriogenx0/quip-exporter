@@ -13,10 +13,13 @@ define assemble
 	codesign --force --deep --sign - $(BUILD_BUNDLE)
 endef
 
-.PHONY: help build dev publish install uninstall open close reinstall-open clean reinstall icon test-note test-markdown-import
+.PHONY: help build dev publish install uninstall open close reinstall-open clean reinstall icon test-note test-markdown-import test-quick
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*## "}; {printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
+
+test-quick: ## Run the fast unit test suite (no AppleScript/UI)
+	swift test --disable-sandbox
 
 build: ## Build the debug app bundle
 	swift build --disable-sandbox
