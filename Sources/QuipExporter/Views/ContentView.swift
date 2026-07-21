@@ -288,6 +288,7 @@ struct ControlBar: View {
                 Spacer()
                 if !runner.isRunning && !runner.logEntries.isEmpty {
                     Button("Save Log") { saveLog() }
+                    Button("Clear Log") { runner.logEntries = [] }
                 }
                 if !runner.isRunning && !quipToken.isEmpty {
                     Button("Scan") {
