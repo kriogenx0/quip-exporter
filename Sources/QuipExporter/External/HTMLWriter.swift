@@ -15,7 +15,7 @@ struct HTMLWriter {
         return content.contains("content=\"\(createdStr)\"")
     }
 
-    func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
+    func buildContent(title: String, html: String, quipLink: String, createdStr: String, folderPath: [String]) -> String {
         let folderDisplay = folderPath.dropFirst().joined(separator: " / ")
         var head = "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"UTF-8\">\n"
         head += "<meta name=\"created\" content=\"\(escAttr(createdStr))\">\n"
@@ -26,9 +26,22 @@ struct HTMLWriter {
             head += "<meta name=\"quip-link\" content=\"\(escAttr(quipLink))\">\n"
         }
         head += "<title>\(escAttr(title))</title>\n</head>\n<body>\n"
-        let content = head + html + "\n</body>\n</html>"
+        return head + html + "\n</body>\n</html>"
+    }
+
+    func writeContent(_ content: String, title: String, dir: URL) throws {
         let file = dir.appendingPathComponent(sanitize(title) + ".html")
         try content.write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    func existingContent(title: String, dir: URL) -> String? {
+        let file = dir.appendingPathComponent(sanitize(title) + ".html")
+        return try? String(contentsOf: file, encoding: .utf8)
+    }
+
+    func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
+        let content = buildContent(title: title, html: html, quipLink: quipLink, createdStr: createdStr, folderPath: folderPath)
+        try writeContent(content, title: title, dir: dir)
     }
 
     func saveImage(data: Data, blobHash: String, dir: URL) throws -> String {

@@ -7,6 +7,52 @@ private final class OverwriteBatch {
     var choice: OverwriteChoice?
 }
 
+// Shells out to /usr/bin/diff so overwrite confirmations can show exactly what would
+// change, using the same unified-diff format developers already read day to day.
+private func unifiedDiff(old: String, new: String) -> String {
+    let tmp = FileManager.default.temporaryDirectory
+    let oldFile = tmp.appendingPathComponent(UUID().uuidString)
+    let newFile = tmp.appendingPathComponent(UUID().uuidString)
+    defer {
+        try? FileManager.default.removeItem(at: oldFile)
+        try? FileManager.default.removeItem(at: newFile)
+    }
+    do {
+        try old.write(to: oldFile, atomically: true, encoding: .utf8)
+        try new.write(to: newFile, atomically: true, encoding: .utf8)
+    } catch {
+        return "(could not compute diff: \(error.localizedDescription))"
+    }
+
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/diff")
+    proc.arguments = ["-u", "--label", "existing", "--label", "from Quip", oldFile.path, newFile.path]
+    let pipe = Pipe()
+    proc.standardOutput = pipe
+    do {
+        try proc.run()
+    } catch {
+        return "(diff unavailable: \(error.localizedDescription))"
+    }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    proc.waitUntilExit()
+    let output = String(data: data, encoding: .utf8) ?? ""
+    return output.isEmpty ? "No differences." : output
+}
+
+// A scrollable, read-only monospaced text view sized for diff output in an NSAlert.
+private func diffAccessoryView(_ text: String) -> NSScrollView {
+    let scrollView = NSTextView.scrollableTextView()
+    scrollView.frame = NSRect(x: 0, y: 0, width: 560, height: 320)
+    scrollView.hasVerticalScroller = true
+    if let textView = scrollView.documentView as? NSTextView {
+        textView.string = text
+        textView.isEditable = false
+        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+    }
+    return scrollView
+}
+
 @MainActor
 class MigrationRunner: ObservableObject {
     @Published var logEntries: [LogEntry] = []
@@ -90,13 +136,20 @@ class MigrationRunner: ObservableObject {
             }
 
             let batch = OverwriteBatch()
-            let confirmOverwrite: (String, [String]) async -> OverwriteChoice = { [weak self] title, path in
+            let confirmOverwrite: (String, [String], String?, String?) async -> OverwriteChoice = { [weak self] title, path, oldContent, newContent in
                 if let choice = batch.choice { return choice }
                 return await MainActor.run { [weak self] in
                     let alert = NSAlert()
                     alert.messageText = "\"\(title)\" already exists"
                     let sub = path.count > 1 ? path.dropFirst().joined(separator: " / ") : "Root folder"
                     alert.informativeText = "\(sub)\n\nOverwrite it with the latest version from Quip, or skip it?"
+                    if let newContent {
+                        if let oldContent {
+                            alert.accessoryView = diffAccessoryView(unifiedDiff(old: oldContent, new: newContent))
+                        } else {
+                            alert.accessoryView = diffAccessoryView("(existing content can't be read for a diff — preview of what would be written)\n\n" + newContent)
+                        }
+                    }
                     alert.addButton(withTitle: "Overwrite")
                     alert.addButton(withTitle: "Overwrite All")
                     alert.addButton(withTitle: "Skip")

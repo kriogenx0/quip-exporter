@@ -20,7 +20,7 @@ private struct DestinationConfig {
     let document: ExportDestination
     let spreadsheet: ExportDestination
     let confirm: ((String, [String], Bool) async -> ExportDestination?)?
-    let confirmOverwrite: ((String, [String]) async -> OverwriteChoice)?
+    let confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)?
 }
 
 func run(
@@ -32,7 +32,7 @@ func run(
     exportFolder: URL?,
     blobCache: URL,
     confirm: ((String, [String], Bool) async -> ExportDestination?)? = nil,
-    confirmOverwrite: ((String, [String]) async -> OverwriteChoice)? = nil,
+    confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)? = nil,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     await log("Fetching current user...", .info)
@@ -304,7 +304,11 @@ private func migrateThread(
         var noteId = ""
         do {
             let exists = try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr)
-            switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
+            let oldBody = exists ? try nw.existingBody(title: noteTitle, folderId: folderId, createdStr: createdStr) : nil
+            switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
+                                          oldContent: oldBody, newContent: fullHtml,
+                                          confirmOverwrite: destinations.confirmOverwrite) {
+            case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
             case .skip: await log("  [skipped]  \(noteTitle)", .info); return
             case .stop: return
             case .proceed(let update):
@@ -346,22 +350,28 @@ private func migrateThread(
     // --- Markdown path ---
     if let mw = writers.markdown, let dir = dirs.markdownDir, chosenDest == .markdown {
         let exists = mw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr)
-        let wasUpdate: Bool
-        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
-        case .stop: return
-        case .proceed(let update): wasUpdate = update
-        }
 
         let resolvedHtml = await resolveImagesForMarkdown(
             html: rawHtml, threadId: threadId, client: client,
             blobCache: blobCache, dir: dir, markdownWriter: mw, log: log
         )
         let processedHtml = stripLeadingHeading(html: resolvedHtml, title: title)
+        let newContent = mw.buildContent(title: noteTitle, html: processedHtml, quipLink: quipLink,
+                                          createdStr: createdStr, folderPath: notesPath)
+        let oldContent = exists ? mw.existingContent(title: noteTitle, dir: dir) : nil
+
+        let wasUpdate: Bool
+        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
+                                      oldContent: oldContent, newContent: newContent,
+                                      confirmOverwrite: destinations.confirmOverwrite) {
+        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .stop: return
+        case .proceed(let update): wasUpdate = update
+        }
 
         do {
-            try mw.writeNote(title: noteTitle, html: processedHtml, dir: dir,
-                             quipLink: quipLink, createdStr: createdStr, folderPath: notesPath)
+            try mw.writeContent(newContent, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
         }
@@ -383,22 +393,28 @@ private func migrateThread(
     // --- HTML path ---
     if let hw = writers.html, let dir = dirs.htmlDir, chosenDest == .html {
         let exists = hw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr)
-        let wasUpdate: Bool
-        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
-        case .stop: return
-        case .proceed(let update): wasUpdate = update
-        }
 
         let resolvedHtml = await resolveImagesForHTML(
             html: rawHtml, threadId: threadId, client: client,
             blobCache: blobCache, dir: dir, htmlWriter: hw, log: log
         )
         let processedHtml = stripLeadingHeading(html: resolvedHtml, title: title)
+        let newContent = hw.buildContent(title: noteTitle, html: processedHtml, quipLink: quipLink,
+                                          createdStr: createdStr, folderPath: notesPath)
+        let oldContent = exists ? hw.existingContent(title: noteTitle, dir: dir) : nil
+
+        let wasUpdate: Bool
+        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
+                                      oldContent: oldContent, newContent: newContent,
+                                      confirmOverwrite: destinations.confirmOverwrite) {
+        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .stop: return
+        case .proceed(let update): wasUpdate = update
+        }
 
         do {
-            try hw.writeNote(title: noteTitle, html: processedHtml, dir: dir,
-                             quipLink: quipLink, createdStr: createdStr, folderPath: notesPath)
+            try hw.writeContent(newContent, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
         }
@@ -420,18 +436,31 @@ private func migrateThread(
     // --- Numbers path ---
     if let nuw = writers.numbers, let dir = dirs.numbersDir, chosenDest == .numbers {
         let exists = nuw.noteExists(title: noteTitle, dir: dir)
+        let processedHtml = stripLeadingHeading(html: rawHtml, title: title)
+
+        let sheets: [(name: String, rows: [[String]])]
+        do {
+            sheets = try nuw.buildSheets(title: noteTitle, html: processedHtml, quipLink: quipLink,
+                                          createdStr: createdStr, folderPath: notesPath)
+        } catch {
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+        }
+        // No existingPreviewText for Numbers (reading a .numbers file back requires opening
+        // it in Numbers) — the confirmation still shows a preview of what would be written.
+        let newContent = nuw.previewText(sheets: sheets)
+
         let wasUpdate: Bool
-        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
+        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
+                                      oldContent: nil, newContent: newContent,
+                                      confirmOverwrite: destinations.confirmOverwrite) {
+        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
         case .skip: await log("  [skipped]  \(noteTitle)", .info); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
 
-        let processedHtml = stripLeadingHeading(html: rawHtml, title: title)
-
         do {
-            try nuw.writeNote(title: noteTitle, html: processedHtml, dir: dir,
-                              quipLink: quipLink, createdStr: createdStr, folderPath: notesPath)
+            try nuw.writeSheets(sheets, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
         }
@@ -453,18 +482,30 @@ private func migrateThread(
     // --- CSV path ---
     if let cw = writers.csv, let dir = dirs.csvDir, chosenDest == .csv {
         let exists = cw.noteExists(title: noteTitle, dir: dir)
+        let processedHtml = stripLeadingHeading(html: rawHtml, title: title)
+
+        let sheets: [(name: String, rows: [[String]])]
+        do {
+            sheets = try cw.buildSheets(title: noteTitle, html: processedHtml, quipLink: quipLink,
+                                        createdStr: createdStr, folderPath: notesPath)
+        } catch {
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+        }
+        let newContent = SpreadsheetHTMLParser.previewText(sheets: sheets)
+        let oldContent = exists ? cw.existingPreviewText(title: noteTitle, dir: dir) : nil
+
         let wasUpdate: Bool
-        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
+        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
+                                      oldContent: oldContent, newContent: newContent,
+                                      confirmOverwrite: destinations.confirmOverwrite) {
+        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
         case .skip: await log("  [skipped]  \(noteTitle)", .info); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
 
-        let processedHtml = stripLeadingHeading(html: rawHtml, title: title)
-
         do {
-            try cw.writeNote(title: noteTitle, html: processedHtml, dir: dir,
-                             quipLink: quipLink, createdStr: createdStr, folderPath: notesPath)
+            try cw.writeSheets(sheets, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
         }
@@ -646,21 +687,28 @@ private func scanExistence(
 
 private enum ExistingAction {
     case proceed(wasUpdate: Bool)
+    case unchanged
     case skip
     case stop
 }
 
 // Prompts the user when a document already exists in the destination. Without a
 // confirmOverwrite callback (shouldn't normally happen), defaults to skipping.
+// oldContent/newContent (when both present) let the caller show a diff before overwriting,
+// and are compared up front so a document that's byte-for-byte identical skips silently
+// instead of prompting.
 private func resolveExisting(
     exists: Bool,
     title: String,
     notesPath: [String],
-    confirmOverwrite: ((String, [String]) async -> OverwriteChoice)?
+    oldContent: String?,
+    newContent: String?,
+    confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)?
 ) async -> ExistingAction {
     guard exists else { return .proceed(wasUpdate: false) }
+    if let oldContent, let newContent, oldContent == newContent { return .unchanged }
     guard let confirmOverwrite else { return .skip }
-    switch await confirmOverwrite(title, notesPath) {
+    switch await confirmOverwrite(title, notesPath, oldContent, newContent) {
     case .overwrite: return .proceed(wasUpdate: true)
     case .skip: return .skip
     case .stop: return .stop

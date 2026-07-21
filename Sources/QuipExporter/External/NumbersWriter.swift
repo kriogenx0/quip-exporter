@@ -17,7 +17,7 @@ struct NumbersWriter {
         return FileManager.default.fileExists(atPath: file.path)
     }
 
-    func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
+    func buildSheets(title: String, html: String, quipLink: String, createdStr: String, folderPath: [String]) throws -> [(name: String, rows: [[String]])] {
         var sheets = SpreadsheetHTMLParser.parseSheets(fromHTML: html)
         guard !sheets.isEmpty else { throw SpreadsheetError.noTablesFound }
 
@@ -26,7 +26,17 @@ struct NumbersWriter {
         if !folderDisplay.isEmpty { infoRows.append(["Quip Folder", folderDisplay]) }
         if !quipLink.isEmpty { infoRows.append(["Quip Link", quipLink]) }
         sheets.append((name: "Quip Info", rows: infoRows))
+        return sheets
+    }
 
+    // Numbers has no scriptable way to read a .numbers file's contents back out cheaply
+    // (it would require opening the file in Numbers itself), so unlike CSV there's no
+    // existingPreviewText — only a preview of what's about to be written.
+    func previewText(sheets: [(name: String, rows: [[String]])]) -> String {
+        SpreadsheetHTMLParser.previewText(sheets: sheets)
+    }
+
+    func writeSheets(_ sheets: [(name: String, rows: [[String]])], title: String, dir: URL) throws {
         let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmpDir) }
@@ -41,6 +51,11 @@ struct NumbersWriter {
         try? FileManager.default.removeItem(at: targetFile)
         let script = buildScript(csvPaths: csvPaths, names: sheets.map { $0.name }, targetFile: targetFile)
         _ = try AppleScriptRunner.run(script)
+    }
+
+    func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
+        let sheets = try buildSheets(title: title, html: html, quipLink: quipLink, createdStr: createdStr, folderPath: folderPath)
+        try writeSheets(sheets, title: title, dir: dir)
     }
 
     // MARK: - AppleScript generation
