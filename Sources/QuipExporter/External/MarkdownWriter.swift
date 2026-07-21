@@ -16,7 +16,7 @@ struct MarkdownWriter {
         return content.hasPrefix("---") && content.contains("\ncreated: \(createdStr)\n")
     }
 
-    func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
+    func buildContent(title: String, html: String, quipLink: String, createdStr: String, folderPath: [String]) -> String {
         let markdown = htmlToMarkdown(html)
         let folderDisplay = folderPath.dropFirst().joined(separator: " / ")
 
@@ -25,9 +25,22 @@ struct MarkdownWriter {
         if !quipLink.isEmpty { front += "quip_link: \"\(quipLink)\"\n" }
         front += "---\n\n"
 
-        let content = front + markdown
+        return front + markdown
+    }
+
+    func writeContent(_ content: String, title: String, dir: URL) throws {
         let file = dir.appendingPathComponent(sanitize(title) + ".md")
         try content.write(to: file, atomically: true, encoding: .utf8)
+    }
+
+    func existingContent(title: String, dir: URL) -> String? {
+        let file = dir.appendingPathComponent(sanitize(title) + ".md")
+        return try? String(contentsOf: file, encoding: .utf8)
+    }
+
+    func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
+        let content = buildContent(title: title, html: html, quipLink: quipLink, createdStr: createdStr, folderPath: folderPath)
+        try writeContent(content, title: title, dir: dir)
     }
 
     // Saves blob data to _assets/<hash>.<ext> inside dir, returns relative markdown image ref.

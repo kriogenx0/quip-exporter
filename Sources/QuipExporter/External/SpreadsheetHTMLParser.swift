@@ -26,6 +26,12 @@ struct SpreadsheetHTMLParser {
         rows.map { row in row.map(csvField).joined(separator: ",") }.joined(separator: "\r\n")
     }
 
+    // A single text blob covering every sheet — used to preview/diff what CSVWriter or
+    // NumbersWriter is about to write, since both ultimately export the same per-tab data.
+    static func previewText(sheets: [(name: String, rows: [[String]])]) -> String {
+        sheets.map { sheet in "== \(sheet.name) ==\n\(csv(rows: sheet.rows))" }.joined(separator: "\n\n")
+    }
+
     private static func csvField(_ field: String) -> String {
         guard field.contains(",") || field.contains("\"") || field.contains("\n") || field.contains("\r") else {
             return field

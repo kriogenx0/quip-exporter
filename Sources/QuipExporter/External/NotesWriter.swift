@@ -66,6 +66,22 @@ end tell
 """) == "true"
     }
 
+    // Returns the body of the existing note matched by noteExists' own criteria, for
+    // diffing against the freshly-generated HTML before deciding whether to overwrite.
+    func existingBody(title: String, folderId: String, createdStr: String) throws -> String? {
+        let result = try run("""
+tell application "Notes"
+    set theFolder to folder id "\(esc(folderId))" of \(accountRef)
+    set matchNotes to every note of theFolder whose name is "\(esc(title))"
+    repeat with n in matchNotes
+        if body of n contains "Created in Quip: \(esc(createdStr))" then return body of n
+    end repeat
+    return ""
+end tell
+""")
+        return result.isEmpty ? nil : result
+    }
+
     @discardableResult
     func createNote(title: String, htmlBody: String, folderId: String) throws -> String {
         let tmp = FileManager.default.temporaryDirectory
