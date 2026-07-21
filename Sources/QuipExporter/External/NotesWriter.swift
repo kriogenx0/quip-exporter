@@ -66,28 +66,31 @@ end tell
 """) == "true"
     }
 
-    func createNote(title: String, htmlBody: String, folderId: String) throws {
+    @discardableResult
+    func createNote(title: String, htmlBody: String, folderId: String) throws -> String {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".html")
         try htmlBody.write(to: tmp, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: tmp) }
-        _ = try run("""
+        return try run("""
 tell application "Notes"
     set theFolder to folder id "\(esc(folderId))" of \(accountRef)
     set htmlContent to do shell script "cat " & quoted form of "\(tmp.path)"
-    make new note at theFolder with properties {body:htmlContent}
+    set theNote to make new note at theFolder with properties {body:htmlContent}
+    return id of theNote
 end tell
 """)
     }
 
     // Replaces the body of the existing note matched by noteExists' own criteria
     // (same title, body containing the same "Created in Quip" marker).
-    func updateNote(title: String, htmlBody: String, folderId: String, createdStr: String) throws {
+    @discardableResult
+    func updateNote(title: String, htmlBody: String, folderId: String, createdStr: String) throws -> String {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".html")
         try htmlBody.write(to: tmp, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: tmp) }
-        _ = try run("""
+        return try run("""
 tell application "Notes"
     set theFolder to folder id "\(esc(folderId))" of \(accountRef)
     set htmlContent to do shell script "cat " & quoted form of "\(tmp.path)"
@@ -95,10 +98,45 @@ tell application "Notes"
     repeat with n in matchNotes
         if body of n contains "Created in Quip: \(esc(createdStr))" then
             set body of n to htmlContent
-            return
+            return id of n
         end if
     end repeat
-    make new note at theFolder with properties {body:htmlContent}
+    set theNote to make new note at theFolder with properties {body:htmlContent}
+    return id of theNote
+end tell
+""")
+    }
+
+    // Notes' scripting dictionary has no per-paragraph checklist API — the only way to
+    // turn a line into a real checkbox item is to select it in the editor UI and trigger
+    // Format > Checklist, via System Events. This is experimental: it requires granting
+    // Notes/System Events Accessibility access (System Settings > Privacy & Security >
+    // Accessibility), and relies on each item's text being unique enough within the note
+    // to locate via a plain text search. Failures here are non-fatal to the caller.
+    func applyChecklistFormatting(noteId: String, itemTexts: [String]) throws {
+        guard !itemTexts.isEmpty else { return }
+        let itemList = itemTexts.map { "\"\(esc($0))\"" }.joined(separator: ", ")
+        _ = try run("""
+tell application "Notes"
+    activate
+    show note id "\(esc(noteId))" of \(accountRef)
+end tell
+delay 0.4
+tell application "System Events"
+    tell process "Notes"
+        set targetItems to {\(itemList)}
+        repeat with itemText in targetItems
+            try
+                set noteArea to text area 1 of scroll area 1 of front window
+                set fullText to (value of noteArea) as string
+                set charOffset to offset of (itemText as string) in fullText
+                if charOffset > 0 then
+                    set value of attribute "AXSelectedTextRange" of noteArea to {charOffset - 1, length of (itemText as string)}
+                    click menu item "Checklist" of menu "Format" of menu bar 1
+                end if
+            end try
+        end repeat
+    end tell
 end tell
 """)
     }
@@ -175,9 +213,10 @@ end tell
 
     // MARK: - HTML building
 
-    func buildHTML(html: String, noteTitle: String, createdStr: String, folderDisplay: String, quipLink: String) -> String {
+    func buildHTML(html: String, noteTitle: String, createdStr: String, folderDisplay: String, quipLink: String) -> (html: String, checklistItems: [String]) {
         var body = html
-        body = convertChecklists(body)
+        let (checklistHTML, checklistItems) = convertChecklists(body)
+        body = checklistHTML
         body = convertDecimalLists(body)
         body = stripListNoise(body)
         body = numberOrderedLists(body)
@@ -187,11 +226,12 @@ end tell
         body = convertHighlights(body)
         let linkLine = quipLink.isEmpty ? "" :
             "<p><em>Quip Link: <a href=\"\(escHTML(quipLink))\">\(escHTML(quipLink))</a></em></p>"
-        return "<html><head><style>li{margin:0;padding:0}li p{margin:0;padding:0}ul,ol{margin:0;padding:0 0 0 1.5em}</style></head><body>"
+        let fullHTML = "<html><head><style>li{margin:0;padding:0}li p{margin:0;padding:0}ul,ol{margin:0;padding:0 0 0 1.5em}</style></head><body>"
             + "<h1>\(escHTML(noteTitle))</h1>"
             + "<p><em>Created in Quip: \(createdStr)</em></p>"
             + "<p><em>From Quip Folder: \(escHTML(folderDisplay))</em></p>"
             + linkLine + "<hr/>" + body + "</body></html>"
+        return (fullHTML, checklistItems)
     }
 
     // Apple Notes' body-setting API silently drops background-color spans (confirmed via
@@ -221,7 +261,10 @@ end tell
 
     // MARK: - Checklist conversion
 
-    private func convertChecklists(_ html: String) -> String {
+    // Returns the converted HTML plus the plain-text (with [x]/[ ] prefix) of every
+    // checklist item, in document order — used as search needles by
+    // applyChecklistFormatting to locate each line in the live Notes editor afterward.
+    private func convertChecklists(_ html: String) -> (html: String, items: [String]) {
         var s = html
         // Tag Quip checklist <ul> elements for processing
         s = (try? NSRegularExpression(
@@ -237,17 +280,18 @@ end tell
     }
 
     // Converts tagged checklist items to [x]/[ ] prefixed plain list items.
-    private func applyCheckboxSymbols(_ html: String) -> String {
+    private func applyCheckboxSymbols(_ html: String) -> (html: String, items: [String]) {
         let open = "<ul data-quip-checklist>"
         let close = "</ul>"
         var result = ""
+        var items: [String] = []
         var remaining = html[...]
         while let r = remaining.range(of: open) {
             result += remaining[..<r.lowerBound]
             result += "<ul>"
             remaining = remaining[r.upperBound...]
             guard let c = remaining.range(of: close) else {
-                result += remaining; return result
+                result += remaining; return (result, items)
             }
             var inner = String(remaining[..<c.lowerBound])
             // Sentinel prevents checked items from being re-matched by the unchecked pass
@@ -256,11 +300,27 @@ end tell
                 .stringByReplacingMatches(in: inner, range: NSRange(inner.startIndex..., in: inner),
                                           withTemplate: "<li>[ ] ") ?? inner
             inner = inner.replacingOccurrences(of: "\u{02}", with: "<li>[x] ")
+            items.append(contentsOf: extractListItemTexts(inner))
             result += inner + close
             remaining = remaining[c.upperBound...]
         }
         result += remaining
-        return result
+        return (result, items)
+    }
+
+    // Strips HTML tags from each <li> to get the plain text Notes will actually display.
+    private func extractListItemTexts(_ html: String) -> [String] {
+        guard let liRegex = try? NSRegularExpression(
+            pattern: #"<li[^>]*>(.*?)</li>"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return [] }
+        let ns = html as NSString
+        return liRegex.matches(in: html, range: NSRange(location: 0, length: ns.length)).compactMap { match in
+            let inner = ns.substring(with: match.range(at: 1))
+            let stripped = (try? NSRegularExpression(pattern: "<[^>]+>"))?
+                .stringByReplacingMatches(in: inner, range: NSRange(inner.startIndex..., in: inner), withTemplate: "") ?? inner
+            let text = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
     }
 
     // MARK: - List conversion

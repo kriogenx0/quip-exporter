@@ -297,10 +297,11 @@ private func migrateThread(
         var html = await inlineImages(html: rawHtml, threadId: threadId, client: client, blobCache: blobCache, log: log)
         html = stripLeadingHeading(html: html, title: title)
         let folderDisplay = notesPath.dropFirst().joined(separator: " / ")
-        let fullHtml = nw.buildHTML(html: html, noteTitle: noteTitle, createdStr: createdStr,
-                                    folderDisplay: folderDisplay, quipLink: quipLink)
+        let (fullHtml, checklistItems) = nw.buildHTML(html: html, noteTitle: noteTitle, createdStr: createdStr,
+                                                       folderDisplay: folderDisplay, quipLink: quipLink)
 
         let wasUpdate: Bool
+        var noteId = ""
         do {
             let exists = try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr)
             switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
@@ -309,13 +310,21 @@ private func migrateThread(
             case .proceed(let update):
                 wasUpdate = update
                 if update {
-                    try nw.updateNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId, createdStr: createdStr)
+                    noteId = try nw.updateNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId, createdStr: createdStr)
                 } else {
-                    try nw.createNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId)
+                    noteId = try nw.createNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId)
                 }
             }
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+        }
+
+        if !checklistItems.isEmpty {
+            do {
+                try nw.applyChecklistFormatting(noteId: noteId, itemTexts: checklistItems)
+            } catch {
+                await log("  [warning]  \(noteTitle) — checklist formatting attempt failed: \(error.localizedDescription)", .warning)
+            }
         }
 
         let verb = wasUpdate ? "updated" : "copied"
