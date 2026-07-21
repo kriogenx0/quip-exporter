@@ -83,6 +83,18 @@ struct SettingsPanel: View {
         Form {
             Section {
                 HStack {
+                    Text("Platform")
+                    Spacer()
+                    Picker("", selection: $quipDomain) {
+                        ForEach(QuipDomain.allCases) { d in
+                            Text(d.rawValue).tag(d)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                }
+
+                HStack {
                     Text("Quip Token").font(.headline)
                     Spacer()
                     Link("Get token", destination: quipDomain.tokenURL)
@@ -101,18 +113,6 @@ struct SettingsPanel: View {
                     }
                     .buttonStyle(.plain)
 
-                }
-
-                HStack {
-                    Text("Platform")
-                    Spacer()
-                    Picker("", selection: $quipDomain) {
-                        ForEach(QuipDomain.allCases) { d in
-                            Text(d.rawValue).tag(d)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
                 }
             }
 
