@@ -7,7 +7,12 @@ struct ContentView: View {
     @AppStorage("spreadsheetDestination") private var spreadsheetDestination: ExportDestination = .appleNotes
     @AppStorage("deleteAfterCopy") private var deleteAfterCopy = false
     @AppStorage("notesAccount") private var notesAccount = ""
-    @AppStorage("exportFolderPath") private var exportFolderPath = ""
+    @AppStorage("exportFolderPath") private var exportFolderPath = Self.defaultExportFolderPath
+
+    private static var defaultExportFolderPath: String {
+        FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("QuipDocuments").path ?? ""
+    }
 
     private var exportFolder: Binding<URL?> {
         Binding(
