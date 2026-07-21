@@ -67,14 +67,6 @@ func run(
             await log("Failed to create root Notes folder: \(error.localizedDescription)", .error); return
         }
     }
-    if let folder = exportFolder, writers.markdown != nil || writers.html != nil || writers.numbers != nil || writers.csv != nil {
-        do {
-            try FileManager.default.createDirectory(at: folder.appendingPathComponent("From Quip"),
-                                                    withIntermediateDirectories: true)
-        } catch {
-            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
-        }
-    }
 
     var visitedFolders = Set<String>()
     var visitedThreads = Set<String>()
@@ -160,6 +152,10 @@ func scan(
 
 private let skippedInNotes: Set<String> = ["Desktop", "Starred", "Private"]
 
+// Folder names that are flattened out of the file-based export path (Markdown/HTML/
+// Numbers/CSV) — e.g. "Desktop / Archive / Foo" becomes "Desktop / Foo".
+private let skippedInFiles: Set<String> = ["Archive"]
+
 private func migrateFolder(
     folderId: String,
     notesPath: [String],
@@ -184,12 +180,12 @@ private func migrateFolder(
     }
 
     let folderTitle = data.folder.title
-    let nextMdPath = mdPath + [folderTitle]
+    let nextMdPath = skippedInFiles.contains(folderTitle) ? mdPath : mdPath + [folderTitle]
     let nextNotesPath = (writers.notes != nil && skippedInNotes.contains(folderTitle))
         ? notesPath
         : notesPath + [folderTitle]
 
-    await log("Folder: \(nextMdPath.joined(separator: " / "))", .info)
+    await log("Folder: \(nextMdPath.dropFirst().joined(separator: " / "))", .info)
 
     var dirs = WriterDirs()
 
@@ -548,7 +544,7 @@ private func scanFolder(
     }
 
     let folderTitle = data.folder.title
-    let nextMdPath = mdPath + [folderTitle]
+    let nextMdPath = skippedInFiles.contains(folderTitle) ? mdPath : mdPath + [folderTitle]
     let nextNotesPath = (writers.notes != nil && skippedInNotes.contains(folderTitle))
         ? notesPath
         : notesPath + [folderTitle]
