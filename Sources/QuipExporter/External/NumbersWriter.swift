@@ -1,8 +1,12 @@
 import Foundation
 
-// Drives the real Numbers app via AppleScript: each detected HTML table becomes a CSV,
-// Numbers imports each CSV into its own document, and the resulting sheets are merged
-// into one document (Numbers has no scriptable "import CSV as sheet N" command).
+// Drives the real Numbers app via AppleScript. Builds every sheet/table/cell natively
+// in a single document, rather than importing each tab as its own CSV-backed document
+// and merging sheets across documents — that approach opened one Numbers window per
+// sheet and relied on cross-document `duplicate`, which reliably failed with "Sheets
+// can not be copied" (-1717) regardless of window visibility/position, and visibly
+// flashed a window per sheet. Building natively means only one document (and window)
+// ever exists for the whole export.
 struct NumbersWriter {
     let outputDir: URL
 
@@ -37,19 +41,9 @@ struct NumbersWriter {
     }
 
     func writeSheets(_ sheets: [(name: String, rows: [[String]])], title: String, dir: URL) throws {
-        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
-
-        let csvPaths = try sheets.enumerated().map { index, sheet -> URL in
-            let path = tmpDir.appendingPathComponent("sheet\(index + 1).csv")
-            try SpreadsheetHTMLParser.csv(rows: sheet.rows).write(to: path, atomically: true, encoding: .utf8)
-            return path
-        }
-
         let targetFile = dir.appendingPathComponent(sanitize(title) + ".numbers")
         try? FileManager.default.removeItem(at: targetFile)
-        let script = buildScript(csvPaths: csvPaths, names: sheets.map { $0.name }, targetFile: targetFile)
+        let script = buildScript(sheets: sheets, targetFile: targetFile)
         _ = try AppleScriptRunner.run(script)
     }
 
@@ -60,52 +54,58 @@ struct NumbersWriter {
 
     // MARK: - AppleScript generation
 
-    // `duplicate ... to end of sheets of doc1` is asynchronous — Numbers can return from
-    // the command before the sheet actually lands in doc1, so a fixed `delay` after it is
-    // a race that silently drops sheets under load. Polling the sheet count until it
-    // actually increases (instead of guessing a delay) is what makes the merge reliable.
-    // Windows are moved off-screen immediately after each doc opens (and Numbers is never
-    // `activate`d) so the export doesn't visibly take over the screen. Setting `visible to
-    // false` instead of repositioning was tried first, but Numbers' cross-document
-    // `duplicate` needs the window to still be a normal, rendered window to work — a hidden
-    // window makes it fail with "Sheets can not be copied" (-1717).
-    private func buildScript(csvPaths: [URL], names: [String], targetFile: URL) -> String {
+    // Only one document is ever created (no per-sheet CSV import docs, no cross-document
+    // sheet copy), and its window is moved off-screen right away — Numbers has no headless
+    // mode, so a window briefly exists, but this is the closest to "don't open documents"
+    // AppleScript automation allows. Explicitly specifying the "Blank" template avoids the
+    // Template Chooser dialog `make new document` would otherwise show.
+    private func buildScript(sheets: [(name: String, rows: [[String]])], targetFile: URL) -> String {
         var lines = ["tell application \"Numbers\""]
-        lines.append("\tset doc1 to open POSIX file \"\(esc(csvPaths[0].path))\"")
-        lines += waitAndMoveOffscreen(doc: "doc1")
-        lines.append("\tset name of sheet 1 of doc1 to \"\(esc(names[0]))\"")
-        for i in 1..<csvPaths.count {
-            let docVar = "doc\(i + 1)"
-            lines.append("\tset \(docVar) to open POSIX file \"\(esc(csvPaths[i].path))\"")
-            lines += waitAndMoveOffscreen(doc: docVar)
-            lines.append("\tset sheetCountBefore to (count of sheets of doc1)")
-            lines.append("\tduplicate (sheet 1 of \(docVar)) to end of sheets of doc1")
-            lines.append("\trepeat until (count of sheets of doc1) > sheetCountBefore")
-            lines.append("\t\tdelay 0.1")
+        lines.append("\tset doc1 to make new document with properties {document template:template \"Blank\"}")
+        lines.append("\trepeat until (exists sheet 1 of doc1)")
+        lines.append("\t\tdelay 0.1")
+        lines.append("\tend repeat")
+        lines.append("\ttry")
+        lines.append("\t\tset position of window 1 of doc1 to {-2000, -2000}")
+        lines.append("\tend try")
+
+        for (index, sheet) in sheets.enumerated() {
+            let rowCount = max(1, sheet.rows.count)
+            let colCount = max(1, sheet.rows.map { $0.count }.max() ?? 1)
+            let sheetRef: String
+            if index == 0 {
+                sheetRef = "sheet 1 of doc1"
+                lines.append("\tset name of \(sheetRef) to \"\(esc(sheet.name))\"")
+            } else {
+                lines.append("\tmake new sheet at end of sheets of doc1 with properties {name:\"\(esc(sheet.name))\"}")
+                sheetRef = "last sheet of doc1"
+            }
+            // Tables aren't guaranteed to exist (or to have the right dimensions) on a
+            // fresh sheet, so any default table is cleared and replaced with one sized
+            // exactly to the data before cell values are set.
+            lines.append("\trepeat while (count of tables of \(sheetRef)) > 0")
+            lines.append("\t\tdelete table 1 of \(sheetRef)")
             lines.append("\tend repeat")
-            lines.append("\tset name of (last sheet of doc1) to \"\(esc(names[i]))\"")
-            lines.append("\tclose \(docVar) saving no")
+            lines.append("\tmake new table at end of tables of \(sheetRef) with properties {row count:\(rowCount), column count:\(colCount)}")
+            let tableRef = "table 1 of \(sheetRef)"
+            for (r, row) in sheet.rows.enumerated() {
+                for (c, value) in row.enumerated() where !value.isEmpty {
+                    lines.append("\tset value of cell \(c + 1) of row \(r + 1) of \(tableRef) to \"\(esc(value))\"")
+                }
+            }
         }
+
         lines.append("\tsave doc1 in POSIX file \"\(esc(targetFile.path))\"")
         lines.append("\tclose doc1 saving no")
         lines.append("end tell")
         return lines.joined(separator: "\n")
     }
 
-    private func waitAndMoveOffscreen(doc: String) -> [String] {
-        [
-            "\trepeat until (exists sheet 1 of \(doc))",
-            "\t\tdelay 0.1",
-            "\tend repeat",
-            "\ttry",
-            "\t\tset position of window 1 of \(doc) to {-2000, -2000}",
-            "\tend try",
-        ]
-    }
-
     private func esc(_ s: String) -> String {
         s.replacingOccurrences(of: "\\", with: "\\\\")
          .replacingOccurrences(of: "\"", with: "\\\"")
+         .replacingOccurrences(of: "\n", with: " ")
+         .replacingOccurrences(of: "\r", with: " ")
     }
 
     private func sanitize(_ name: String) -> String {
