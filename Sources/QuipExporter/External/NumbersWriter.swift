@@ -1,0 +1,97 @@
+import Foundation
+
+// Drives the real Numbers app via AppleScript: each detected HTML table becomes a CSV,
+// Numbers imports each CSV into its own document, and the resulting sheets are merged
+// into one document (Numbers has no scriptable "import CSV as sheet N" command).
+struct NumbersWriter {
+    let outputDir: URL
+
+    func ensureFolder(path: [String]) throws -> URL {
+        let dir = path.dropFirst().reduce(outputDir) { $0.appendingPathComponent(sanitize($1)) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    func noteExists(title: String, dir: URL) -> Bool {
+        let file = dir.appendingPathComponent(sanitize(title) + ".numbers")
+        return FileManager.default.fileExists(atPath: file.path)
+    }
+
+    func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
+        var sheets = SpreadsheetHTMLParser.parseSheets(fromHTML: html)
+        guard !sheets.isEmpty else { throw SpreadsheetError.noTablesFound }
+
+        let folderDisplay = folderPath.dropFirst().joined(separator: " / ")
+        var infoRows = [["Field", "Value"], ["Title", title], ["Created in Quip", createdStr]]
+        if !folderDisplay.isEmpty { infoRows.append(["Quip Folder", folderDisplay]) }
+        if !quipLink.isEmpty { infoRows.append(["Quip Link", quipLink]) }
+        sheets.append((name: "Quip Info", rows: infoRows))
+
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let csvPaths = try sheets.enumerated().map { index, sheet -> URL in
+            let path = tmpDir.appendingPathComponent("sheet\(index + 1).csv")
+            try SpreadsheetHTMLParser.csv(rows: sheet.rows).write(to: path, atomically: true, encoding: .utf8)
+            return path
+        }
+
+        let targetFile = dir.appendingPathComponent(sanitize(title) + ".numbers")
+        try? FileManager.default.removeItem(at: targetFile)
+        let script = buildScript(csvPaths: csvPaths, names: sheets.map { $0.name }, targetFile: targetFile)
+        _ = try AppleScriptRunner.run(script)
+    }
+
+    // MARK: - AppleScript generation
+
+    // `duplicate ... to end of sheets of doc1` is asynchronous — Numbers can return from
+    // the command before the sheet actually lands in doc1, so a fixed `delay` after it is
+    // a race that silently drops sheets under load. Polling the sheet count until it
+    // actually increases (instead of guessing a delay) is what makes the merge reliable.
+    // Windows are hidden immediately after each doc opens (and Numbers is never
+    // `activate`d) so the export doesn't visibly take over the screen.
+    private func buildScript(csvPaths: [URL], names: [String], targetFile: URL) -> String {
+        var lines = ["tell application \"Numbers\""]
+        lines.append("\tset doc1 to open POSIX file \"\(esc(csvPaths[0].path))\"")
+        lines += waitAndHide(doc: "doc1")
+        lines.append("\tset name of sheet 1 of doc1 to \"\(esc(names[0]))\"")
+        for i in 1..<csvPaths.count {
+            let docVar = "doc\(i + 1)"
+            lines.append("\tset \(docVar) to open POSIX file \"\(esc(csvPaths[i].path))\"")
+            lines += waitAndHide(doc: docVar)
+            lines.append("\tset sheetCountBefore to (count of sheets of doc1)")
+            lines.append("\tduplicate (sheet 1 of \(docVar)) to end of sheets of doc1")
+            lines.append("\trepeat until (count of sheets of doc1) > sheetCountBefore")
+            lines.append("\t\tdelay 0.1")
+            lines.append("\tend repeat")
+            lines.append("\tset name of (last sheet of doc1) to \"\(esc(names[i]))\"")
+            lines.append("\tclose \(docVar) saving no")
+        }
+        lines.append("\tsave doc1 in POSIX file \"\(esc(targetFile.path))\"")
+        lines.append("\tclose doc1 saving no")
+        lines.append("end tell")
+        return lines.joined(separator: "\n")
+    }
+
+    private func waitAndHide(doc: String) -> [String] {
+        [
+            "\trepeat until (exists sheet 1 of \(doc))",
+            "\t\tdelay 0.1",
+            "\tend repeat",
+            "\ttry",
+            "\t\tset visible of window 1 of \(doc) to false",
+            "\tend try",
+        ]
+    }
+
+    private func esc(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private func sanitize(_ name: String) -> String {
+        name.components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|")).joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}

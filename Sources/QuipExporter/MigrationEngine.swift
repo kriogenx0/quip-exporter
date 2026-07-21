@@ -1,14 +1,38 @@
 import Foundation
 
+private struct Writers {
+    let notes: NotesWriter?
+    let markdown: MarkdownWriter?
+    let html: HTMLWriter?
+    let numbers: NumbersWriter?
+    let csv: CSVWriter?
+}
+
+private struct WriterDirs {
+    var notesFolderId: String?
+    var markdownDir: URL?
+    var htmlDir: URL?
+    var numbersDir: URL?
+    var csvDir: URL?
+}
+
+private struct DestinationConfig {
+    let document: ExportDestination
+    let spreadsheet: ExportDestination
+    let confirm: ((String, [String], Bool) async -> ExportDestination?)?
+    let confirmOverwrite: ((String, [String]) async -> OverwriteChoice)?
+}
+
 func run(
     client: QuipClient,
-    destination: ExportDestination,
+    documentDestination: ExportDestination,
+    spreadsheetDestination: ExportDestination,
     deleteAfterCopy: Bool,
     notesAccount: String,
-    markdownOutputDir: URL?,
-    htmlOutputDir: URL?,
+    exportFolder: URL?,
     blobCache: URL,
-    confirm: ((String, [String]) async -> ExportDestination?)? = nil,
+    confirm: ((String, [String], Bool) async -> ExportDestination?)? = nil,
+    confirmOverwrite: ((String, [String]) async -> OverwriteChoice)? = nil,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     await log("Fetching current user...", .info)
@@ -23,29 +47,29 @@ func run(
     let rootIds = ([user.desktopFolderId, user.starredFolderId].compactMap { $0 }
                    + (user.sharedFolderIds ?? []))
 
-    let notesWriter = (destination == .appleNotes || destination == .ask)
+    let categories = [documentDestination, spreadsheetDestination]
+    let notesWriter = (categories.contains(.appleNotes) || categories.contains(.ask))
         ? NotesWriter(account: notesAccount) : nil
-    let markdownWriter = (destination == .markdown || destination == .ask)
-        ? markdownOutputDir.map { MarkdownWriter(outputDir: $0) } : nil
-    let htmlWriter = (destination == .html || destination == .ask)
-        ? htmlOutputDir.map { HTMLWriter(outputDir: $0) } : nil
+    let markdownWriter = (categories.contains(.markdown) || categories.contains(.ask))
+        ? exportFolder.map { MarkdownWriter(outputDir: $0) } : nil
+    let htmlWriter = (categories.contains(.html) || categories.contains(.ask))
+        ? exportFolder.map { HTMLWriter(outputDir: $0) } : nil
+    let numbersWriter = (spreadsheetDestination == .numbers || spreadsheetDestination == .ask)
+        ? exportFolder.map { NumbersWriter(outputDir: $0) } : nil
+    let csvWriter = (spreadsheetDestination == .csv || spreadsheetDestination == .ask)
+        ? exportFolder.map { CSVWriter(outputDir: $0) } : nil
+    let writers = Writers(notes: notesWriter, markdown: markdownWriter, html: htmlWriter, numbers: numbersWriter, csv: csvWriter)
+    let destinations = DestinationConfig(document: documentDestination, spreadsheet: spreadsheetDestination,
+                                          confirm: confirm, confirmOverwrite: confirmOverwrite)
 
-    if let nw = notesWriter {
+    if let nw = writers.notes {
         do { _ = try nw.getOrCreateFolder(path: ["From Quip"]) } catch {
             await log("Failed to create root Notes folder: \(error.localizedDescription)", .error); return
         }
     }
-    if let md = markdownWriter {
+    if let folder = exportFolder, writers.markdown != nil || writers.html != nil || writers.numbers != nil || writers.csv != nil {
         do {
-            try FileManager.default.createDirectory(at: md.outputDir.appendingPathComponent("From Quip"),
-                                                    withIntermediateDirectories: true)
-        } catch {
-            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
-        }
-    }
-    if let hw = htmlWriter {
-        do {
-            try FileManager.default.createDirectory(at: hw.outputDir.appendingPathComponent("From Quip"),
+            try FileManager.default.createDirectory(at: folder.appendingPathComponent("From Quip"),
                                                     withIntermediateDirectories: true)
         } catch {
             await log("Failed to create output folder: \(error.localizedDescription)", .error); return
@@ -59,15 +83,77 @@ func run(
         if Task.isCancelled { break }
         await migrateFolder(
             folderId: fid, notesPath: ["From Quip"], mdPath: ["From Quip"],
-            client: client, notesWriter: notesWriter, markdownWriter: markdownWriter, htmlWriter: htmlWriter,
+            client: client, writers: writers,
             blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, trashFolderId: trashFolderId,
             visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-            confirm: confirm, log: log
+            destinations: destinations, log: log
         )
     }
 
     await log("Done. Migrated \(visitedThreads.count) documents across \(visitedFolders.count) folders.", .info)
+}
+
+// Read-only pass over the whole account: fetches the same folders/threads as run(...)
+// but never writes anything, tallying what a real run would transfer, update, or trash.
+func scan(
+    client: QuipClient,
+    documentDestination: ExportDestination,
+    spreadsheetDestination: ExportDestination,
+    deleteAfterCopy: Bool,
+    notesAccount: String,
+    exportFolder: URL?,
+    log: (String, LogEntry.Level) async -> Void
+) async -> ScanSummary? {
+    await log("Scanning Quip account...", .info)
+
+    let user: QuipCurrentUserResponse
+    do { user = try await client.getCurrentUser() } catch {
+        await log("Auth failed: \(error.localizedDescription)", .error); return nil
+    }
+    await log("Authenticated as: \(user.name)", .info)
+
+    let rootIds = ([user.desktopFolderId, user.starredFolderId].compactMap { $0 }
+                   + (user.sharedFolderIds ?? []))
+
+    let categories = [documentDestination, spreadsheetDestination]
+    let notesWriter = (categories.contains(.appleNotes) || categories.contains(.ask))
+        ? NotesWriter(account: notesAccount) : nil
+    let markdownWriter = (categories.contains(.markdown) || categories.contains(.ask))
+        ? exportFolder.map { MarkdownWriter(outputDir: $0) } : nil
+    let htmlWriter = (categories.contains(.html) || categories.contains(.ask))
+        ? exportFolder.map { HTMLWriter(outputDir: $0) } : nil
+    let numbersWriter = (spreadsheetDestination == .numbers || spreadsheetDestination == .ask)
+        ? exportFolder.map { NumbersWriter(outputDir: $0) } : nil
+    let csvWriter = (spreadsheetDestination == .csv || spreadsheetDestination == .ask)
+        ? exportFolder.map { CSVWriter(outputDir: $0) } : nil
+    let writers = Writers(notes: notesWriter, markdown: markdownWriter, html: htmlWriter, numbers: numbersWriter, csv: csvWriter)
+    let destinations = DestinationConfig(document: documentDestination, spreadsheet: spreadsheetDestination,
+                                          confirm: nil, confirmOverwrite: nil)
+
+    let needsFolder = documentDestination == .markdown || documentDestination == .html
+        || spreadsheetDestination == .markdown || spreadsheetDestination == .html
+        || spreadsheetDestination == .numbers || spreadsheetDestination == .csv
+    if needsFolder && exportFolder == nil {
+        await log("Documents/spreadsheets are set to a folder-based destination but no export folder is configured — those will be excluded from this scan.", .warning)
+    }
+
+    var summary = ScanSummary()
+    var visitedFolders = Set<String>()
+    var visitedThreads = Set<String>()
+
+    for fid in rootIds {
+        if Task.isCancelled { break }
+        await scanFolder(
+            folderId: fid, notesPath: ["From Quip"], mdPath: ["From Quip"],
+            client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
+            currentUserId: user.id, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
+            destinations: destinations, summary: &summary, log: log
+        )
+    }
+
+    await log("Scan complete. \(summary.toTransfer) to transfer, \(summary.toUpdate) to update, \(summary.toTrash) to delete (trash in Quip) after copying.", .info)
+    return summary
 }
 
 // MARK: - Folder & thread traversal
@@ -79,16 +165,14 @@ private func migrateFolder(
     notesPath: [String],
     mdPath: [String],
     client: QuipClient,
-    notesWriter: NotesWriter?,
-    markdownWriter: MarkdownWriter?,
-    htmlWriter: HTMLWriter?,
+    writers: Writers,
     blobCache: URL,
     deleteAfterCopy: Bool,
     currentUserId: String,
     trashFolderId: String,
     visitedFolders: inout Set<String>,
     visitedThreads: inout Set<String>,
-    confirm: ((String, [String]) async -> ExportDestination?)?,
+    destinations: DestinationConfig,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visitedFolders.contains(folderId), !Task.isCancelled else { return }
@@ -101,28 +185,36 @@ private func migrateFolder(
 
     let folderTitle = data.folder.title
     let nextMdPath = mdPath + [folderTitle]
-    let nextNotesPath = (notesWriter != nil && skippedInNotes.contains(folderTitle))
+    let nextNotesPath = (writers.notes != nil && skippedInNotes.contains(folderTitle))
         ? notesPath
         : notesPath + [folderTitle]
 
     await log("Folder: \(nextMdPath.joined(separator: " / "))", .info)
 
-    var notesFolderId: String? = nil
-    var markdownDir: URL? = nil
-    var htmlDir: URL? = nil
+    var dirs = WriterDirs()
 
-    if let nw = notesWriter {
-        do { notesFolderId = try nw.getOrCreateFolder(path: nextNotesPath) } catch {
+    if let nw = writers.notes {
+        do { dirs.notesFolderId = try nw.getOrCreateFolder(path: nextNotesPath) } catch {
             await log("Failed to create Notes folder: \(error.localizedDescription)", .error); return
         }
     }
-    if let mw = markdownWriter {
-        do { markdownDir = try mw.ensureFolder(path: nextMdPath) } catch {
+    if let mw = writers.markdown {
+        do { dirs.markdownDir = try mw.ensureFolder(path: nextMdPath) } catch {
             await log("Failed to create output folder: \(error.localizedDescription)", .error); return
         }
     }
-    if let hw = htmlWriter {
-        do { htmlDir = try hw.ensureFolder(path: nextMdPath) } catch {
+    if let hw = writers.html {
+        do { dirs.htmlDir = try hw.ensureFolder(path: nextMdPath) } catch {
+            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
+        }
+    }
+    if let nuw = writers.numbers {
+        do { dirs.numbersDir = try nuw.ensureFolder(path: nextMdPath) } catch {
+            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
+        }
+    }
+    if let cw = writers.csv {
+        do { dirs.csvDir = try cw.ensureFolder(path: nextMdPath) } catch {
             await log("Failed to create output folder: \(error.localizedDescription)", .error); return
         }
     }
@@ -131,21 +223,20 @@ private func migrateFolder(
         if Task.isCancelled { break }
         if let threadId = child.threadId {
             await migrateThread(
-                threadId: threadId, notesPath: nextMdPath,
-                notesFolderId: notesFolderId, markdownDir: markdownDir, htmlDir: htmlDir,
-                client: client, notesWriter: notesWriter, markdownWriter: markdownWriter, htmlWriter: htmlWriter,
+                threadId: threadId, notesPath: nextMdPath, dirs: dirs,
+                client: client, writers: writers,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
-                visited: &visitedThreads, confirm: confirm, log: log
+                visited: &visitedThreads, destinations: destinations, log: log
             )
         } else if let childId = child.folderId {
             await migrateFolder(
                 folderId: childId, notesPath: nextNotesPath, mdPath: nextMdPath,
-                client: client, notesWriter: notesWriter, markdownWriter: markdownWriter, htmlWriter: htmlWriter,
+                client: client, writers: writers,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
                 visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-                confirm: confirm, log: log
+                destinations: destinations, log: log
             )
         }
     }
@@ -154,19 +245,15 @@ private func migrateFolder(
 private func migrateThread(
     threadId: String,
     notesPath: [String],
-    notesFolderId: String?,
-    markdownDir: URL?,
-    htmlDir: URL?,
+    dirs: WriterDirs,
     client: QuipClient,
-    notesWriter: NotesWriter?,
-    markdownWriter: MarkdownWriter?,
-    htmlWriter: HTMLWriter?,
+    writers: Writers,
     blobCache: URL,
     deleteAfterCopy: Bool,
     currentUserId: String,
     trashFolderId: String,
     visited: inout Set<String>,
-    confirm: ((String, [String]) async -> ExportDestination?)?,
+    destinations: DestinationConfig,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visited.contains(threadId), !Task.isCancelled else { return }
@@ -193,53 +280,68 @@ private func migrateThread(
     let shared = isShared(thread: thread, currentUserId: currentUserId)
     let noteTitle = shared ? title : "\(title) (Private)"
 
-    // In Ask mode, confirm returns which destination to use (nil = skip).
-    let chosenDest: ExportDestination?
-    if let confirm {
-        chosenDest = await confirm(title, notesPath)
-        guard chosenDest != nil, !Task.isCancelled else { return }
+    // Each thread resolves to exactly one concrete destination: either the setting for
+    // its category (document vs. spreadsheet), or — in Ask mode — whatever the user picks.
+    let categoryDestination = thread.isSpreadsheet ? destinations.spreadsheet : destinations.document
+
+    let chosenDest: ExportDestination
+    if categoryDestination == .ask, let confirm = destinations.confirm {
+        guard let picked = await confirm(title, notesPath, thread.isSpreadsheet), !Task.isCancelled else { return }
+        chosenDest = picked
     } else {
-        chosenDest = nil
+        chosenDest = categoryDestination
     }
 
     // --- Apple Notes path ---
-    if let nw = notesWriter, let folderId = notesFolderId,
-       (chosenDest == nil || chosenDest == .appleNotes) {
+    if let nw = writers.notes, let folderId = dirs.notesFolderId, chosenDest == .appleNotes {
         var html = await inlineImages(html: rawHtml, threadId: threadId, client: client, blobCache: blobCache, log: log)
         html = stripLeadingHeading(html: html, title: title)
         let folderDisplay = notesPath.dropFirst().joined(separator: " / ")
         let fullHtml = nw.buildHTML(html: html, noteTitle: noteTitle, createdStr: createdStr,
                                     folderDisplay: folderDisplay, quipLink: quipLink)
 
+        let wasUpdate: Bool
         do {
-            if chosenDest == nil, try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr) {
-                await log("  [skipped]  \(noteTitle)", .info); return
+            let exists = try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr)
+            switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
+            case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+            case .stop: return
+            case .proceed(let update):
+                wasUpdate = update
+                if update {
+                    try nw.updateNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId, createdStr: createdStr)
+                } else {
+                    try nw.createNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId)
+                }
             }
-            try nw.createNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
         }
 
+        let verb = wasUpdate ? "updated" : "copied"
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
                 let trashedTitle = "\(noteTitle) (Trashed in Quip)"
                 try nw.renameNote(oldTitle: noteTitle, newTitle: trashedTitle, folderId: folderId)
-                await log("  [copied + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
             } catch {
-                await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
+                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
             }
         } else {
-            await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
+            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
         }
     }
 
     // --- Markdown path ---
-    if let mw = markdownWriter, let dir = markdownDir,
-       (chosenDest == nil || chosenDest == .markdown) {
-        if chosenDest == nil && mw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr) {
-            await log("  [skipped]  \(noteTitle)", .info); return
+    if let mw = writers.markdown, let dir = dirs.markdownDir, chosenDest == .markdown {
+        let exists = mw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr)
+        let wasUpdate: Bool
+        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .stop: return
+        case .proceed(let update): wasUpdate = update
         }
 
         let resolvedHtml = await resolveImagesForMarkdown(
@@ -255,24 +357,28 @@ private func migrateThread(
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
         }
 
+        let verb = wasUpdate ? "updated" : "copied"
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
-                await log("  [copied + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
             } catch {
-                await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
+                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
             }
         } else {
-            await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
+            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
         }
     }
 
     // --- HTML path ---
-    if let hw = htmlWriter, let dir = htmlDir,
-       (chosenDest == nil || chosenDest == .html) {
-        if chosenDest == nil && hw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr) {
-            await log("  [skipped]  \(noteTitle)", .info); return
+    if let hw = writers.html, let dir = dirs.htmlDir, chosenDest == .html {
+        let exists = hw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr)
+        let wasUpdate: Bool
+        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .stop: return
+        case .proceed(let update): wasUpdate = update
         }
 
         let resolvedHtml = await resolveImagesForHTML(
@@ -288,21 +394,269 @@ private func migrateThread(
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
         }
 
+        let verb = wasUpdate ? "updated" : "copied"
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
-                await log("  [copied + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
             } catch {
-                await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
+                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
             }
         } else {
-            await log("  [copied]   \(noteTitle)  (created \(createdStr))", .info)
+            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
+        }
+    }
+
+    // --- Numbers path ---
+    if let nuw = writers.numbers, let dir = dirs.numbersDir, chosenDest == .numbers {
+        let exists = nuw.noteExists(title: noteTitle, dir: dir)
+        let wasUpdate: Bool
+        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .stop: return
+        case .proceed(let update): wasUpdate = update
+        }
+
+        let processedHtml = stripLeadingHeading(html: rawHtml, title: title)
+
+        do {
+            try nuw.writeNote(title: noteTitle, html: processedHtml, dir: dir,
+                              quipLink: quipLink, createdStr: createdStr, folderPath: notesPath)
+        } catch {
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+        }
+
+        let verb = wasUpdate ? "updated" : "copied"
+        if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
+            do {
+                try await client.trashThread(threadId, trashFolderId: trashFolderId)
+                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+            } catch {
+                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
+                await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
+            }
+        } else {
+            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
+        }
+    }
+
+    // --- CSV path ---
+    if let cw = writers.csv, let dir = dirs.csvDir, chosenDest == .csv {
+        let exists = cw.noteExists(title: noteTitle, dir: dir)
+        let wasUpdate: Bool
+        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath, confirmOverwrite: destinations.confirmOverwrite) {
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .stop: return
+        case .proceed(let update): wasUpdate = update
+        }
+
+        let processedHtml = stripLeadingHeading(html: rawHtml, title: title)
+
+        do {
+            try cw.writeNote(title: noteTitle, html: processedHtml, dir: dir,
+                             quipLink: quipLink, createdStr: createdStr, folderPath: notesPath)
+        } catch {
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+        }
+
+        let verb = wasUpdate ? "updated" : "copied"
+        if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
+            do {
+                try await client.trashThread(threadId, trashFolderId: trashFolderId)
+                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+            } catch {
+                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
+                await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
+            }
+        } else {
+            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
         }
     }
 }
 
+private func scanFolder(
+    folderId: String,
+    notesPath: [String],
+    mdPath: [String],
+    client: QuipClient,
+    writers: Writers,
+    deleteAfterCopy: Bool,
+    currentUserId: String,
+    visitedFolders: inout Set<String>,
+    visitedThreads: inout Set<String>,
+    destinations: DestinationConfig,
+    summary: inout ScanSummary,
+    log: (String, LogEntry.Level) async -> Void
+) async {
+    guard !visitedFolders.contains(folderId), !Task.isCancelled else { return }
+    visitedFolders.insert(folderId)
+
+    let data: QuipFolderResponse
+    do { data = try await client.getFolder(folderId) } catch {
+        await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error); return
+    }
+
+    let folderTitle = data.folder.title
+    let nextMdPath = mdPath + [folderTitle]
+    let nextNotesPath = (writers.notes != nil && skippedInNotes.contains(folderTitle))
+        ? notesPath
+        : notesPath + [folderTitle]
+
+    var dirs = WriterDirs()
+
+    if let nw = writers.notes {
+        do { dirs.notesFolderId = try nw.getOrCreateFolder(path: nextNotesPath) } catch {
+            await log("Failed to read Notes folder: \(error.localizedDescription)", .error); return
+        }
+    }
+    if let mw = writers.markdown { dirs.markdownDir = try? mw.ensureFolder(path: nextMdPath) }
+    if let hw = writers.html { dirs.htmlDir = try? hw.ensureFolder(path: nextMdPath) }
+    if let nuw = writers.numbers { dirs.numbersDir = try? nuw.ensureFolder(path: nextMdPath) }
+    if let cw = writers.csv { dirs.csvDir = try? cw.ensureFolder(path: nextMdPath) }
+
+    for child in data.children {
+        if Task.isCancelled { break }
+        if let threadId = child.threadId {
+            await scanThread(
+                threadId: threadId, notesPath: nextMdPath, dirs: dirs,
+                client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
+                currentUserId: currentUserId, visited: &visitedThreads,
+                destinations: destinations, summary: &summary, log: log
+            )
+        } else if let childId = child.folderId {
+            await scanFolder(
+                folderId: childId, notesPath: nextNotesPath, mdPath: nextMdPath,
+                client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
+                currentUserId: currentUserId, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
+                destinations: destinations, summary: &summary, log: log
+            )
+        }
+    }
+}
+
+private func scanThread(
+    threadId: String,
+    notesPath: [String],
+    dirs: WriterDirs,
+    client: QuipClient,
+    writers: Writers,
+    deleteAfterCopy: Bool,
+    currentUserId: String,
+    visited: inout Set<String>,
+    destinations: DestinationConfig,
+    summary: inout ScanSummary,
+    log: (String, LogEntry.Level) async -> Void
+) async {
+    guard !visited.contains(threadId), !Task.isCancelled else { return }
+    visited.insert(threadId)
+
+    let data: QuipThreadResponse
+    do { data = try await client.getThread(threadId) } catch {
+        await log("Failed to fetch thread \(threadId): \(error.localizedDescription)", .error); return
+    }
+
+    let thread = data.thread
+    let title = thread.title
+    let createdStr: String
+    if let usec = thread.createdUsec {
+        let date = Date(timeIntervalSince1970: Double(usec) / 1_000_000)
+        createdStr = DateFormatter.localizedString(from: date, dateStyle: .short, timeStyle: .none)
+    } else {
+        createdStr = "Unknown"
+    }
+
+    let shared = isShared(thread: thread, currentUserId: currentUserId)
+    let noteTitle = shared ? title : "\(title) (Private)"
+    let categoryDestination = thread.isSpreadsheet ? destinations.spreadsheet : destinations.document
+
+    let (handled, exists) = scanExistence(
+        categoryDestination: categoryDestination, isSpreadsheet: thread.isSpreadsheet,
+        noteTitle: noteTitle, createdStr: createdStr, dirs: dirs, writers: writers
+    )
+    guard handled else { return }
+
+    if exists {
+        summary.toUpdate += 1
+    } else {
+        summary.toTransfer += 1
+    }
+    if deleteAfterCopy && !shared {
+        summary.toTrash += 1
+    }
+}
+
+// Determines whether a thread would be handled by a configured writer for its category,
+// and if so, whether it already exists there. In Ask mode we don't know which destination
+// the user will eventually pick, so existence is checked against every writer configured
+// for that category and treated as "already exists" if it's found in any of them.
+private func scanExistence(
+    categoryDestination: ExportDestination,
+    isSpreadsheet: Bool,
+    noteTitle: String,
+    createdStr: String,
+    dirs: WriterDirs,
+    writers: Writers
+) -> (handled: Bool, exists: Bool) {
+    func check(_ dest: ExportDestination) -> Bool? {
+        switch dest {
+        case .appleNotes:
+            guard let nw = writers.notes, let folderId = dirs.notesFolderId else { return nil }
+            return (try? nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr)) ?? false
+        case .markdown:
+            guard let mw = writers.markdown, let dir = dirs.markdownDir else { return nil }
+            return mw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr)
+        case .html:
+            guard let hw = writers.html, let dir = dirs.htmlDir else { return nil }
+            return hw.noteExists(title: noteTitle, dir: dir, createdStr: createdStr)
+        case .numbers:
+            guard isSpreadsheet, let nuw = writers.numbers, let dir = dirs.numbersDir else { return nil }
+            return nuw.noteExists(title: noteTitle, dir: dir)
+        case .csv:
+            guard isSpreadsheet, let cw = writers.csv, let dir = dirs.csvDir else { return nil }
+            return cw.noteExists(title: noteTitle, dir: dir)
+        case .ask:
+            return nil
+        }
+    }
+
+    if categoryDestination != .ask {
+        guard let exists = check(categoryDestination) else { return (false, false) }
+        return (true, exists)
+    }
+
+    let candidates: [ExportDestination] = isSpreadsheet
+        ? [.appleNotes, .numbers, .csv, .markdown, .html]
+        : [.appleNotes, .markdown, .html]
+    let results = candidates.compactMap(check)
+    guard !results.isEmpty else { return (false, false) }
+    return (true, results.contains(true))
+}
+
 // MARK: - Helpers
+
+private enum ExistingAction {
+    case proceed(wasUpdate: Bool)
+    case skip
+    case stop
+}
+
+// Prompts the user when a document already exists in the destination. Without a
+// confirmOverwrite callback (shouldn't normally happen), defaults to skipping.
+private func resolveExisting(
+    exists: Bool,
+    title: String,
+    notesPath: [String],
+    confirmOverwrite: ((String, [String]) async -> OverwriteChoice)?
+) async -> ExistingAction {
+    guard exists else { return .proceed(wasUpdate: false) }
+    guard let confirmOverwrite else { return .skip }
+    switch await confirmOverwrite(title, notesPath) {
+    case .overwrite: return .proceed(wasUpdate: true)
+    case .skip: return .skip
+    case .stop: return .stop
+    }
+}
 
 private func isShared(thread: QuipThreadInfo, currentUserId: String) -> Bool {
     guard let members = thread.memberIds, !members.isEmpty else { return true }

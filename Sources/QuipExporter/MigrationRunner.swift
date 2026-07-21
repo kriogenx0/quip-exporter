@@ -1,6 +1,12 @@
 import Foundation
 import AppKit
 
+// Boxes the "apply to all remaining items" choice so the confirmOverwrite closure
+// can persist it across calls without capturing a mutable var in a @Sendable closure.
+private final class OverwriteBatch {
+    var choice: OverwriteChoice?
+}
+
 @MainActor
 class MigrationRunner: ObservableObject {
     @Published var logEntries: [LogEntry] = []
@@ -16,12 +22,12 @@ class MigrationRunner: ObservableObject {
     func start(
         token: String,
         domain: QuipDomain,
-        destination: ExportDestination,
+        documentDestination: ExportDestination,
+        spreadsheetDestination: ExportDestination,
         deleteAfterCopy: Bool,
         rateDelay: Double,
         notesAccount: String,
-        markdownOutputDir: URL?,
-        htmlOutputDir: URL?
+        exportFolder: URL?
     ) {
         guard !isRunning else { return }
         isRunning = true
@@ -37,11 +43,10 @@ class MigrationRunner: ObservableObject {
                 await MainActor.run { self.logEntries.append(entry) }
             }
 
-            let confirm: ((String, [String]) async -> ExportDestination?)?
-            if destination == .ask {
-                let hasMarkdown = markdownOutputDir != nil
-                let hasHTML = htmlOutputDir != nil
-                confirm = { [weak self] title, path in
+            let confirm: ((String, [String], Bool) async -> ExportDestination?)?
+            if documentDestination == .ask || spreadsheetDestination == .ask {
+                let hasFolder = exportFolder != nil
+                confirm = { [weak self] title, path, isSpreadsheet in
                     await MainActor.run { [weak self] in
                         let alert = NSAlert()
                         alert.messageText = "Export \"\(title)\"?"
@@ -50,11 +55,19 @@ class MigrationRunner: ObservableObject {
                         // Build buttons in order; track which destination each maps to.
                         var choices: [ExportDestination] = [.appleNotes]
                         alert.addButton(withTitle: "Copy to Notes")
-                        if hasMarkdown {
+                        if isSpreadsheet && hasFolder {
+                            alert.addButton(withTitle: "Save as Numbers")
+                            choices.append(.numbers)
+                        }
+                        if isSpreadsheet && hasFolder {
+                            alert.addButton(withTitle: "Save as CSV")
+                            choices.append(.csv)
+                        }
+                        if hasFolder {
                             alert.addButton(withTitle: "Save as Markdown")
                             choices.append(.markdown)
                         }
-                        if hasHTML {
+                        if hasFolder {
                             alert.addButton(withTitle: "Save as HTML")
                             choices.append(.html)
                         }
@@ -76,17 +89,94 @@ class MigrationRunner: ObservableObject {
                 confirm = nil
             }
 
+            let batch = OverwriteBatch()
+            let confirmOverwrite: (String, [String]) async -> OverwriteChoice = { [weak self] title, path in
+                if let choice = batch.choice { return choice }
+                return await MainActor.run { [weak self] in
+                    let alert = NSAlert()
+                    alert.messageText = "\"\(title)\" already exists"
+                    let sub = path.count > 1 ? path.dropFirst().joined(separator: " / ") : "Root folder"
+                    alert.informativeText = "\(sub)\n\nOverwrite it with the latest version from Quip, or skip it?"
+                    alert.addButton(withTitle: "Overwrite")
+                    alert.addButton(withTitle: "Overwrite All")
+                    alert.addButton(withTitle: "Skip")
+                    alert.addButton(withTitle: "Skip All")
+                    alert.addButton(withTitle: "Stop")
+                    let response = alert.runModal()
+                    switch response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue {
+                    case 0: return .overwrite
+                    case 1: batch.choice = .overwrite; return .overwrite
+                    case 2: return .skip
+                    case 3: batch.choice = .skip; return .skip
+                    default: self?.stop(); return .stop
+                    }
+                }
+            }
+
             await run(
                 client: client,
-                destination: destination,
+                documentDestination: documentDestination,
+                spreadsheetDestination: spreadsheetDestination,
                 deleteAfterCopy: deleteAfterCopy,
                 notesAccount: notesAccount,
-                markdownOutputDir: markdownOutputDir,
-                htmlOutputDir: htmlOutputDir,
+                exportFolder: exportFolder,
                 blobCache: blobCache,
                 confirm: confirm,
+                confirmOverwrite: confirmOverwrite,
                 log: log
             )
+            guard let self else { return }
+            await MainActor.run { self.isRunning = false }
+        }
+    }
+
+    func scanAccount(
+        token: String,
+        domain: QuipDomain,
+        documentDestination: ExportDestination,
+        spreadsheetDestination: ExportDestination,
+        deleteAfterCopy: Bool,
+        rateDelay: Double,
+        notesAccount: String,
+        exportFolder: URL?
+    ) {
+        guard !isRunning else { return }
+        isRunning = true
+        logEntries = []
+
+        migrationTask = Task.detached { [weak self] in
+            let client = QuipClient(token: token, rateDelay: rateDelay, domain: domain)
+
+            func log(_ msg: String, level: LogEntry.Level = .info) async {
+                let entry = LogEntry(message: msg, level: level)
+                guard let self else { return }
+                await MainActor.run { self.logEntries.append(entry) }
+            }
+
+            let summary = await scan(
+                client: client,
+                documentDestination: documentDestination,
+                spreadsheetDestination: spreadsheetDestination,
+                deleteAfterCopy: deleteAfterCopy,
+                notesAccount: notesAccount,
+                exportFolder: exportFolder,
+                log: log
+            )
+
+            if let summary {
+                await MainActor.run {
+                    let alert = NSAlert()
+                    alert.messageText = "Scan Complete"
+                    alert.informativeText = """
+                    \(summary.toTransfer) document(s) will be transferred.
+                    \(summary.toUpdate) already exist and will be updated.
+                    \(summary.toTrash) will be moved to Trash in Quip after copying.
+                    """
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
+            }
+
             guard let self else { return }
             await MainActor.run { self.isRunning = false }
         }

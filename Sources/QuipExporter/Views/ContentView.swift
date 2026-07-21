@@ -3,11 +3,18 @@ import SwiftUI
 struct ContentView: View {
     @AppStorage("quipToken") private var quipToken = ""
     @AppStorage("quipDomain") private var quipDomain: QuipDomain = .quipApple
-    @AppStorage("destination") private var destination: ExportDestination = .appleNotes
+    @AppStorage("documentDestination") private var documentDestination: ExportDestination = .appleNotes
+    @AppStorage("spreadsheetDestination") private var spreadsheetDestination: ExportDestination = .appleNotes
     @AppStorage("deleteAfterCopy") private var deleteAfterCopy = false
     @AppStorage("notesAccount") private var notesAccount = ""
-    @State private var markdownOutputDir: URL? = nil
-    @State private var htmlOutputDir: URL? = nil
+    @AppStorage("exportFolderPath") private var exportFolderPath = ""
+
+    private var exportFolder: Binding<URL?> {
+        Binding(
+            get: { exportFolderPath.isEmpty ? nil : URL(fileURLWithPath: exportFolderPath) },
+            set: { exportFolderPath = $0?.path ?? "" }
+        )
+    }
 
     @StateObject private var runner = MigrationRunner()
 
@@ -16,18 +23,18 @@ struct ContentView: View {
             SettingsPanel(
                 quipToken: $quipToken,
                 quipDomain: $quipDomain,
-                destination: $destination,
+                documentDestination: $documentDestination,
+                spreadsheetDestination: $spreadsheetDestination,
                 deleteAfterCopy: $deleteAfterCopy,
                 notesAccount: $notesAccount,
-                markdownOutputDir: $markdownOutputDir,
-                htmlOutputDir: $htmlOutputDir,
+                exportFolder: exportFolder,
                 isRunning: runner.isRunning
             )
             .fixedSize(horizontal: false, vertical: true)
 
-            MigrationInfoBanner(destination: destination, deleteAfterCopy: deleteAfterCopy,
-                                notesAccount: notesAccount, markdownOutputDir: markdownOutputDir,
-                                htmlOutputDir: htmlOutputDir)
+            MigrationInfoBanner(documentDestination: documentDestination, spreadsheetDestination: spreadsheetDestination,
+                                deleteAfterCopy: deleteAfterCopy, notesAccount: notesAccount,
+                                exportFolder: exportFolder.wrappedValue)
 
             Divider()
 
@@ -39,11 +46,11 @@ struct ContentView: View {
                 runner: runner,
                 quipToken: quipToken,
                 quipDomain: quipDomain,
-                destination: destination,
+                documentDestination: documentDestination,
+                spreadsheetDestination: spreadsheetDestination,
                 deleteAfterCopy: deleteAfterCopy,
                 notesAccount: notesAccount,
-                markdownOutputDir: markdownOutputDir,
-                htmlOutputDir: htmlOutputDir
+                exportFolder: exportFolder.wrappedValue
             )
         }
         .frame(minWidth: 650, minHeight: 550)
@@ -55,13 +62,17 @@ struct ContentView: View {
 struct SettingsPanel: View {
     @Binding var quipToken: String
     @Binding var quipDomain: QuipDomain
-    @Binding var destination: ExportDestination
+    @Binding var documentDestination: ExportDestination
+    @Binding var spreadsheetDestination: ExportDestination
     @Binding var deleteAfterCopy: Bool
     @Binding var notesAccount: String
-    @Binding var markdownOutputDir: URL?
-    @Binding var htmlOutputDir: URL?
+    @Binding var exportFolder: URL?
     let isRunning: Bool
     @State private var showToken = false
+
+    private var needsExportFolder: Bool {
+        documentDestination != .appleNotes || spreadsheetDestination != .appleNotes
+    }
 
     var body: some View {
         Form {
@@ -74,6 +85,7 @@ struct SettingsPanel: View {
                 }
 
                 HStack {
+                    Text("Paste Token")
 
                     TokenField(text: $quipToken, isSecure: !showToken)
                         .frame(height: 22)
@@ -101,9 +113,21 @@ struct SettingsPanel: View {
 
             Section {
                 HStack {
-                    Text("Export to")
+                    Text("Documents")
                     Spacer()
-                    Picker("", selection: $destination) {
+                    Picker("", selection: $documentDestination) {
+                        ForEach(ExportDestination.allCases.filter { $0 != .numbers && $0 != .csv }) { d in
+                            Text(d.rawValue).tag(d)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                }
+
+                HStack {
+                    Text("Spreadsheets")
+                    Spacer()
+                    Picker("", selection: $spreadsheetDestination) {
                         ForEach(ExportDestination.allCases) { d in
                             Text(d.rawValue).tag(d)
                         }
@@ -112,59 +136,8 @@ struct SettingsPanel: View {
                     .fixedSize()
                 }
 
-                if destination == .markdown || destination == .html {
-                    LabeledContent("Output Folder") {
-                        HStack {
-                            let dir = destination == .markdown ? markdownOutputDir : htmlOutputDir
-                            Text(dir?.path ?? "Not selected")
-                                .foregroundStyle(dir == nil ? .secondary : .primary)
-                                .truncationMode(.middle)
-                                .lineLimit(1)
-                            Button("Choose…") {
-                                let panel = NSOpenPanel()
-                                panel.canChooseFiles = false
-                                panel.canChooseDirectories = true
-                                panel.canCreateDirectories = true
-                                if panel.runModal() == .OK {
-                                    if destination == .markdown { markdownOutputDir = panel.url }
-                                    else { htmlOutputDir = panel.url }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if destination == .ask {
-                    LabeledContent("Markdown Folder") {
-                        HStack {
-                            Text(markdownOutputDir?.path ?? "Not configured")
-                                .foregroundStyle(markdownOutputDir == nil ? .secondary : .primary)
-                                .truncationMode(.middle)
-                                .lineLimit(1)
-                            Button(markdownOutputDir == nil ? "Configure…" : "Change…") {
-                                let panel = NSOpenPanel()
-                                panel.canChooseFiles = false
-                                panel.canChooseDirectories = true
-                                panel.canCreateDirectories = true
-                                if panel.runModal() == .OK { markdownOutputDir = panel.url }
-                            }
-                        }
-                    }
-                    LabeledContent("HTML Folder") {
-                        HStack {
-                            Text(htmlOutputDir?.path ?? "Not configured")
-                                .foregroundStyle(htmlOutputDir == nil ? .secondary : .primary)
-                                .truncationMode(.middle)
-                                .lineLimit(1)
-                            Button(htmlOutputDir == nil ? "Configure…" : "Change…") {
-                                let panel = NSOpenPanel()
-                                panel.canChooseFiles = false
-                                panel.canChooseDirectories = true
-                                panel.canCreateDirectories = true
-                                if panel.runModal() == .OK { htmlOutputDir = panel.url }
-                            }
-                        }
-                    }
+                if needsExportFolder {
+                    FolderPickerRow(label: "Export Folder", url: $exportFolder)
                 }
 
                 Toggle("Delete private Quip documents after copying", isOn: $deleteAfterCopy)
@@ -176,38 +149,79 @@ struct SettingsPanel: View {
     }
 }
 
+private struct FolderPickerRow: View {
+    let label: String
+    @Binding var url: URL?
+
+    var body: some View {
+        LabeledContent(label) {
+            HStack {
+                Text(url?.path ?? "Not configured")
+                    .foregroundStyle(url == nil ? .secondary : .primary)
+                    .truncationMode(.middle)
+                    .lineLimit(1)
+                Button(url == nil ? "Configure…" : "Change…") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = false
+                    panel.canChooseDirectories = true
+                    panel.canCreateDirectories = true
+                    if panel.runModal() == .OK { url = panel.url }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Migration info banner
 
 struct MigrationInfoBanner: View {
-    let destination: ExportDestination
+    let documentDestination: ExportDestination
+    let spreadsheetDestination: ExportDestination
     let deleteAfterCopy: Bool
     let notesAccount: String
-    let markdownOutputDir: URL?
-    let htmlOutputDir: URL?
+    let exportFolder: URL?
+
+    private func describe(_ destination: ExportDestination, category: String) -> String {
+        switch destination {
+        case .appleNotes:
+            let account = notesAccount.isEmpty ? "your default Notes account" : "the \"\(notesAccount)\" account"
+            return "\(category) are copied from your Quip account (Desktop, Starred, and Shared folders) into \(account) under a top-level \"From Quip\" folder, preserving the folder hierarchy. Desktop, Starred, and Private folders are flattened into the root."
+        case .numbers:
+            let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
+            return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as native Numbers documents inside \(folder), preserving the folder hierarchy."
+        case .csv:
+            let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
+            return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as CSV files inside \(folder), preserving the folder hierarchy. Each spreadsheet becomes a folder with one CSV file per tab."
+        case .markdown:
+            let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
+            return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as Markdown files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder."
+        case .html:
+            let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
+            return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as HTML files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder."
+        case .ask:
+            return "For each \(category.lowercased()), asks where to export it (configure the export folder above to enable more options)."
+        }
+    }
 
     private var description: String {
         var parts: [String] = []
 
-        switch destination {
-        case .appleNotes:
-            let account = notesAccount.isEmpty ? "your default Notes account" : "the \"\(notesAccount)\" account"
-            parts.append("Copies documents from your Quip account (Desktop, Starred, and Shared folders) into \(account) under a top-level \"From Quip\" folder, preserving the folder hierarchy. Desktop, Starred, and Private folders are flattened into the root.")
-        case .markdown:
-            let folder = markdownOutputDir.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
-            parts.append("Exports documents from your Quip account (Desktop, Starred, and Shared folders) as Markdown files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder.")
-        case .html:
-            let folder = htmlOutputDir.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
-            parts.append("Exports documents from your Quip account (Desktop, Starred, and Shared folders) as HTML files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder.")
-        case .ask:
-            parts.append("For each document, asks where to export it: Apple Notes, Markdown, or HTML. Configure the Markdown and HTML folders above to enable those options in the dialog.")
+        if documentDestination == spreadsheetDestination {
+            parts.append(describe(documentDestination, category: "Documents and spreadsheets"))
+        } else {
+            parts.append(describe(documentDestination, category: "Documents"))
+            parts.append(describe(spreadsheetDestination, category: "Spreadsheets"))
         }
 
         if deleteAfterCopy {
             parts.append("Private (unshared) documents will be moved to Quip Trash after copying.")
         }
 
-        if destination != .ask {
-            parts.append("Already-exported documents are skipped on re-runs.")
+        var skipNote: [String] = []
+        if documentDestination != .ask { skipNote.append("documents") }
+        if spreadsheetDestination != .ask { skipNote.append("spreadsheets") }
+        if !skipNote.isEmpty {
+            parts.append("Already-exported \(skipNote.joined(separator: " and ")) are skipped on re-runs.")
         }
 
         return parts.joined(separator: " ")
@@ -240,16 +254,18 @@ struct ControlBar: View {
     @ObservedObject var runner: MigrationRunner
     let quipToken: String
     let quipDomain: QuipDomain
-    let destination: ExportDestination
+    let documentDestination: ExportDestination
+    let spreadsheetDestination: ExportDestination
     let deleteAfterCopy: Bool
     let notesAccount: String
-    let markdownOutputDir: URL?
-    let htmlOutputDir: URL?
+    let exportFolder: URL?
 
     private var canStart: Bool {
         guard !quipToken.isEmpty else { return false }
-        if destination == .markdown { return markdownOutputDir != nil }
-        if destination == .html { return htmlOutputDir != nil }
+        let categories = [documentDestination, spreadsheetDestination]
+        let needsFolder = categories.contains(.markdown) || categories.contains(.html)
+            || spreadsheetDestination == .numbers || spreadsheetDestination == .csv
+        if needsFolder, exportFolder == nil { return false }
         return true
     }
 
@@ -268,7 +284,21 @@ struct ControlBar: View {
                 if !runner.isRunning && !runner.logEntries.isEmpty {
                     Button("Save Log") { saveLog() }
                 }
-                if !runner.isRunning && destination == .appleNotes {
+                if !runner.isRunning && !quipToken.isEmpty {
+                    Button("Scan") {
+                        runner.scanAccount(
+                            token: quipToken,
+                            domain: quipDomain,
+                            documentDestination: documentDestination,
+                            spreadsheetDestination: spreadsheetDestination,
+                            deleteAfterCopy: deleteAfterCopy,
+                            rateDelay: 0.5,
+                            notesAccount: notesAccount,
+                            exportFolder: exportFolder
+                        )
+                    }
+                }
+                if !runner.isRunning && (documentDestination == .appleNotes || spreadsheetDestination == .appleNotes) {
                     Button("Create Test Note") {
                         runner.runFormattingTest(notesAccount: notesAccount)
                     }
@@ -284,12 +314,12 @@ struct ControlBar: View {
                     runner.start(
                         token: quipToken,
                         domain: quipDomain,
-                        destination: destination,
+                        documentDestination: documentDestination,
+                        spreadsheetDestination: spreadsheetDestination,
                         deleteAfterCopy: deleteAfterCopy,
                         rateDelay: 0.5,
                         notesAccount: notesAccount,
-                        markdownOutputDir: markdownOutputDir,
-                        htmlOutputDir: htmlOutputDir
+                        exportFolder: exportFolder
                     )
                 } label: {
                     Label("Start Exporting", systemImage: "arrow.down.circle.fill")
