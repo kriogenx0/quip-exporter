@@ -64,17 +64,20 @@ struct NumbersWriter {
     // the command before the sheet actually lands in doc1, so a fixed `delay` after it is
     // a race that silently drops sheets under load. Polling the sheet count until it
     // actually increases (instead of guessing a delay) is what makes the merge reliable.
-    // Windows are hidden immediately after each doc opens (and Numbers is never
-    // `activate`d) so the export doesn't visibly take over the screen.
+    // Windows are moved off-screen immediately after each doc opens (and Numbers is never
+    // `activate`d) so the export doesn't visibly take over the screen. Setting `visible to
+    // false` instead of repositioning was tried first, but Numbers' cross-document
+    // `duplicate` needs the window to still be a normal, rendered window to work — a hidden
+    // window makes it fail with "Sheets can not be copied" (-1717).
     private func buildScript(csvPaths: [URL], names: [String], targetFile: URL) -> String {
         var lines = ["tell application \"Numbers\""]
         lines.append("\tset doc1 to open POSIX file \"\(esc(csvPaths[0].path))\"")
-        lines += waitAndHide(doc: "doc1")
+        lines += waitAndMoveOffscreen(doc: "doc1")
         lines.append("\tset name of sheet 1 of doc1 to \"\(esc(names[0]))\"")
         for i in 1..<csvPaths.count {
             let docVar = "doc\(i + 1)"
             lines.append("\tset \(docVar) to open POSIX file \"\(esc(csvPaths[i].path))\"")
-            lines += waitAndHide(doc: docVar)
+            lines += waitAndMoveOffscreen(doc: docVar)
             lines.append("\tset sheetCountBefore to (count of sheets of doc1)")
             lines.append("\tduplicate (sheet 1 of \(docVar)) to end of sheets of doc1")
             lines.append("\trepeat until (count of sheets of doc1) > sheetCountBefore")
@@ -89,13 +92,13 @@ struct NumbersWriter {
         return lines.joined(separator: "\n")
     }
 
-    private func waitAndHide(doc: String) -> [String] {
+    private func waitAndMoveOffscreen(doc: String) -> [String] {
         [
             "\trepeat until (exists sheet 1 of \(doc))",
             "\t\tdelay 0.1",
             "\tend repeat",
             "\ttry",
-            "\t\tset visible of window 1 of \(doc) to false",
+            "\t\tset position of window 1 of \(doc) to {-2000, -2000}",
             "\tend try",
         ]
     }
