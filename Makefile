@@ -16,7 +16,7 @@ endef
 .PHONY: build dev publish install uninstall open close reinstall-open clean reinstall icon test-note test-markdown-import
 
 build:
-	swift build
+	swift build --disable-sandbox
 	$(call assemble,debug)
 
 dev:

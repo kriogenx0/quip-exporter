@@ -11,6 +11,8 @@ struct LogEntry: Identifiable {
 
 enum ExportDestination: String, CaseIterable, Identifiable {
     case appleNotes = "Apple Notes"
+    case numbers = "Numbers"
+    case csv = "CSV"
     case markdown = "Markdown Files"
     case html = "HTML Files"
     case ask = "Ask"
@@ -23,6 +25,18 @@ enum QuipDomain: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var baseURL: URL { URL(string: "https://platform.\(rawValue)/1")! }
     var tokenURL: URL { URL(string: "https://\(rawValue)/dev/token")! }
+}
+
+// The user's response when a document/spreadsheet already exists in the destination.
+enum OverwriteChoice {
+    case overwrite, skip, stop
+}
+
+// Tallies produced by a read-only scan of the Quip account, without writing anything.
+struct ScanSummary {
+    var toTransfer = 0
+    var toUpdate = 0
+    var toTrash = 0
 }
 
 // MARK: - Quip API models
@@ -76,12 +90,17 @@ struct QuipThreadInfo: Decodable {
     let createdUsec: Int64?
     let memberIds: [String]?
     let sharing: QuipSharing?
+    let type: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, link, sharing
+        case id, title, link, sharing, type
         case createdUsec = "created_usec"
         case memberIds = "member_ids"
     }
+
+    // Quip's documented thread types are document/spreadsheet/slides/chat.
+    // Unrecognized or missing values fall back to non-spreadsheet handling.
+    var isSpreadsheet: Bool { type == "spreadsheet" }
 }
 
 struct QuipSharing: Decodable {
@@ -108,5 +127,15 @@ enum NotesError: Error, LocalizedError {
     var errorDescription: String? {
         if case .applescript(let msg) = self { return "AppleScript: \(msg)" }
         return nil
+    }
+}
+
+enum SpreadsheetError: Error, LocalizedError {
+    case noTablesFound
+
+    var errorDescription: String? {
+        switch self {
+        case .noTablesFound: return "No tables found in the spreadsheet HTML"
+        }
     }
 }
