@@ -58,6 +58,7 @@ class MigrationRunner: ObservableObject {
     @Published var logEntries: [LogEntry] = []
     @Published var isRunning = false
     @Published var runSummary = RunSummary()
+    @Published var scanSummary: ScanSummary?
 
     private var migrationTask: Task<Void, Never>?
 
@@ -80,6 +81,7 @@ class MigrationRunner: ObservableObject {
         isRunning = true
         logEntries = []
         runSummary = RunSummary()
+        scanSummary = nil
 
         let blobCache = self.blobCache
         migrationTask = Task.detached { [weak self] in
@@ -214,6 +216,7 @@ class MigrationRunner: ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         logEntries = []
+        scanSummary = nil
 
         migrationTask = Task.detached { [weak self] in
             let client = QuipClient(token: token, rateDelay: rateDelay, domain: domain)
@@ -234,22 +237,11 @@ class MigrationRunner: ObservableObject {
                 log: log
             )
 
-            if let summary {
-                await MainActor.run {
-                    let alert = NSAlert()
-                    alert.messageText = "Scan Complete"
-                    alert.informativeText = """
-                    \(summary.toTransfer) document(s) will be transferred.
-                    \(summary.toUpdate) already exist and will be updated.
-                    \(summary.toTrash) will be moved to Trash in Quip after copying.
-                    """
-                    alert.addButton(withTitle: "OK")
-                    alert.runModal()
-                }
-            }
-
             guard let self else { return }
-            await MainActor.run { self.isRunning = false }
+            await MainActor.run {
+                self.scanSummary = summary
+                self.isRunning = false
+            }
         }
     }
 

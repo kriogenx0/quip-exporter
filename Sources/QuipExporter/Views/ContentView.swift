@@ -257,16 +257,20 @@ struct ResultsPanel: View {
 
             switch tab {
             case .summary:
-                SummaryView(summary: runner.runSummary)
+                SummaryView(summary: runner.runSummary, scanSummary: runner.scanSummary)
             case .logs:
                 LogPanel(entries: runner.logEntries)
             }
+        }
+        .onChange(of: runner.scanSummary) { newValue in
+            if newValue != nil { tab = .summary }
         }
     }
 }
 
 struct SummaryView: View {
     let summary: RunSummary
+    let scanSummary: ScanSummary?
 
     private var rows: [(String, Int)] {
         [
@@ -282,6 +286,13 @@ struct SummaryView: View {
 
     var body: some View {
         Form {
+            if let scanSummary {
+                Section("Scan Results") {
+                    LabeledContent("Documents to transfer", value: "\(scanSummary.toTransfer)")
+                    LabeledContent("Documents to update", value: "\(scanSummary.toUpdate)")
+                    LabeledContent("Documents to trash in Quip after copying", value: "\(scanSummary.toTrash)")
+                }
+            }
             Section {
                 ForEach(rows, id: \.0) { label, value in
                     LabeledContent(label) {
