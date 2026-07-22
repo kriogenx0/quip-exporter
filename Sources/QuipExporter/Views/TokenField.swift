@@ -13,6 +13,7 @@ struct TokenField: View {
             }
         }
         .font(.system(.body, design: .monospaced))
+        .multilineTextAlignment(.leading)
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .overlay(
