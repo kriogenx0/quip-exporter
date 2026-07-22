@@ -39,14 +39,7 @@ struct ContentView: View {
 
             Divider()
 
-            ResultsPanel(
-                runner: runner,
-                documentDestination: documentDestination,
-                spreadsheetDestination: spreadsheetDestination,
-                deleteAfterCopy: deleteAfterCopy,
-                notesAccount: notesAccount,
-                exportFolder: exportFolder.wrappedValue
-            )
+            ResultsPanel(runner: runner)
 
             Divider()
 
@@ -77,6 +70,7 @@ struct SettingsPanel: View {
     @Binding var exportFolder: URL?
     let isRunning: Bool
     @State private var showToken = false
+    @State private var showDescription = false
 
     private var needsExportFolder: Bool {
         documentDestination != .appleNotes || spreadsheetDestination != .appleNotes
@@ -142,6 +136,18 @@ struct SettingsPanel: View {
                 }
 
                 Toggle("Delete private Quip documents after copying", isOn: $deleteAfterCopy)
+
+                DisclosureGroup("What does this do?", isExpanded: $showDescription) {
+                    Text(migrationDescription(
+                        documentDestination: documentDestination,
+                        spreadsheetDestination: spreadsheetDestination,
+                        deleteAfterCopy: deleteAfterCopy,
+                        notesAccount: notesAccount,
+                        exportFolder: exportFolder
+                    ))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
@@ -237,11 +243,6 @@ private enum ResultsTab: String, CaseIterable, Identifiable {
 
 struct ResultsPanel: View {
     @ObservedObject var runner: MigrationRunner
-    let documentDestination: ExportDestination
-    let spreadsheetDestination: ExportDestination
-    let deleteAfterCopy: Bool
-    let notesAccount: String
-    let exportFolder: URL?
     @State private var tab: ResultsTab = .logs
 
     var body: some View {
@@ -256,16 +257,7 @@ struct ResultsPanel: View {
 
             switch tab {
             case .summary:
-                SummaryView(
-                    summary: runner.runSummary,
-                    description: migrationDescription(
-                        documentDestination: documentDestination,
-                        spreadsheetDestination: spreadsheetDestination,
-                        deleteAfterCopy: deleteAfterCopy,
-                        notesAccount: notesAccount,
-                        exportFolder: exportFolder
-                    )
-                )
+                SummaryView(summary: runner.runSummary)
             case .logs:
                 LogPanel(entries: runner.logEntries)
             }
@@ -275,7 +267,6 @@ struct ResultsPanel: View {
 
 struct SummaryView: View {
     let summary: RunSummary
-    let description: String
 
     private var rows: [(String, Int)] {
         [
@@ -291,11 +282,6 @@ struct SummaryView: View {
 
     var body: some View {
         Form {
-            Section {
-                Text(description)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
             Section {
                 ForEach(rows, id: \.0) { label, value in
                     LabeledContent(label) {
