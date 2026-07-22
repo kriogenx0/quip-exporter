@@ -37,13 +37,16 @@ struct ContentView: View {
             )
             .fixedSize(horizontal: false, vertical: true)
 
-            MigrationInfoBanner(documentDestination: documentDestination, spreadsheetDestination: spreadsheetDestination,
-                                deleteAfterCopy: deleteAfterCopy, notesAccount: notesAccount,
-                                exportFolder: exportFolder.wrappedValue)
-
             Divider()
 
-            ResultsPanel(runner: runner)
+            ResultsPanel(
+                runner: runner,
+                documentDestination: documentDestination,
+                spreadsheetDestination: spreadsheetDestination,
+                deleteAfterCopy: deleteAfterCopy,
+                notesAccount: notesAccount,
+                exportFolder: exportFolder.wrappedValue
+            )
 
             Divider()
 
@@ -172,67 +175,56 @@ private struct FolderPickerRow: View {
 
 // MARK: - Migration info banner
 
-struct MigrationInfoBanner: View {
-    let documentDestination: ExportDestination
-    let spreadsheetDestination: ExportDestination
-    let deleteAfterCopy: Bool
-    let notesAccount: String
-    let exportFolder: URL?
+private func describe(_ destination: ExportDestination, category: String, notesAccount: String, exportFolder: URL?) -> String {
+    switch destination {
+    case .appleNotes:
+        let account = notesAccount.isEmpty ? "your default Notes account" : "the \"\(notesAccount)\" account"
+        return "\(category) are copied from your Quip account (Desktop, Starred, and Shared folders) into \(account) under a top-level \"From Quip\" folder, preserving the folder hierarchy. Desktop, Starred, and Private folders are flattened into the root."
+    case .numbers:
+        let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
+        return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as native Numbers documents inside \(folder), preserving the folder hierarchy."
+    case .csv:
+        let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
+        return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as CSV files inside \(folder), preserving the folder hierarchy. Each spreadsheet becomes a folder with one CSV file per tab."
+    case .markdown:
+        let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
+        return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as Markdown files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder."
+    case .html:
+        let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
+        return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as HTML files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder."
+    case .ask:
+        return "For each \(category.lowercased()), asks where to export it (configure the export folder above to enable more options)."
+    }
+}
 
-    private func describe(_ destination: ExportDestination, category: String) -> String {
-        switch destination {
-        case .appleNotes:
-            let account = notesAccount.isEmpty ? "your default Notes account" : "the \"\(notesAccount)\" account"
-            return "\(category) are copied from your Quip account (Desktop, Starred, and Shared folders) into \(account) under a top-level \"From Quip\" folder, preserving the folder hierarchy. Desktop, Starred, and Private folders are flattened into the root."
-        case .numbers:
-            let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
-            return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as native Numbers documents inside \(folder), preserving the folder hierarchy."
-        case .csv:
-            let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
-            return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as CSV files inside \(folder), preserving the folder hierarchy. Each spreadsheet becomes a folder with one CSV file per tab."
-        case .markdown:
-            let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
-            return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as Markdown files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder."
-        case .html:
-            let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
-            return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as HTML files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder."
-        case .ask:
-            return "For each \(category.lowercased()), asks where to export it (configure the export folder above to enable more options)."
-        }
+private func migrationDescription(
+    documentDestination: ExportDestination,
+    spreadsheetDestination: ExportDestination,
+    deleteAfterCopy: Bool,
+    notesAccount: String,
+    exportFolder: URL?
+) -> String {
+    var parts: [String] = []
+
+    if documentDestination == spreadsheetDestination {
+        parts.append(describe(documentDestination, category: "Documents and spreadsheets", notesAccount: notesAccount, exportFolder: exportFolder))
+    } else {
+        parts.append(describe(documentDestination, category: "Documents", notesAccount: notesAccount, exportFolder: exportFolder))
+        parts.append(describe(spreadsheetDestination, category: "Spreadsheets", notesAccount: notesAccount, exportFolder: exportFolder))
     }
 
-    private var description: String {
-        var parts: [String] = []
-
-        if documentDestination == spreadsheetDestination {
-            parts.append(describe(documentDestination, category: "Documents and spreadsheets"))
-        } else {
-            parts.append(describe(documentDestination, category: "Documents"))
-            parts.append(describe(spreadsheetDestination, category: "Spreadsheets"))
-        }
-
-        if deleteAfterCopy {
-            parts.append("Private (unshared) documents will be moved to Quip Trash after copying.")
-        }
-
-        var skipNote: [String] = []
-        if documentDestination != .ask { skipNote.append("documents") }
-        if spreadsheetDestination != .ask { skipNote.append("spreadsheets") }
-        if !skipNote.isEmpty {
-            parts.append("Already-exported \(skipNote.joined(separator: " and ")) are skipped on re-runs.")
-        }
-
-        return parts.joined(separator: " ")
+    if deleteAfterCopy {
+        parts.append("Private (unshared) documents will be moved to Quip Trash after copying.")
     }
 
-    var body: some View {
-        Text(description)
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
+    var skipNote: [String] = []
+    if documentDestination != .ask { skipNote.append("documents") }
+    if spreadsheetDestination != .ask { skipNote.append("spreadsheets") }
+    if !skipNote.isEmpty {
+        parts.append("Already-exported \(skipNote.joined(separator: " and ")) are skipped on re-runs.")
     }
+
+    return parts.joined(separator: " ")
 }
 
 // MARK: - Results (Summary / Logs)
@@ -245,6 +237,11 @@ private enum ResultsTab: String, CaseIterable, Identifiable {
 
 struct ResultsPanel: View {
     @ObservedObject var runner: MigrationRunner
+    let documentDestination: ExportDestination
+    let spreadsheetDestination: ExportDestination
+    let deleteAfterCopy: Bool
+    let notesAccount: String
+    let exportFolder: URL?
     @State private var tab: ResultsTab = .logs
 
     var body: some View {
@@ -259,7 +256,16 @@ struct ResultsPanel: View {
 
             switch tab {
             case .summary:
-                SummaryView(summary: runner.runSummary)
+                SummaryView(
+                    summary: runner.runSummary,
+                    description: migrationDescription(
+                        documentDestination: documentDestination,
+                        spreadsheetDestination: spreadsheetDestination,
+                        deleteAfterCopy: deleteAfterCopy,
+                        notesAccount: notesAccount,
+                        exportFolder: exportFolder
+                    )
+                )
             case .logs:
                 LogPanel(entries: runner.logEntries)
             }
@@ -269,6 +275,7 @@ struct ResultsPanel: View {
 
 struct SummaryView: View {
     let summary: RunSummary
+    let description: String
 
     private var rows: [(String, Int)] {
         [
@@ -284,6 +291,11 @@ struct SummaryView: View {
 
     var body: some View {
         Form {
+            Section {
+                Text(description)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
             Section {
                 ForEach(rows, id: \.0) { label, value in
                     LabeledContent(label) {
