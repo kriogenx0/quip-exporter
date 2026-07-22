@@ -80,7 +80,7 @@ struct SettingsPanel: View {
         Form {
             Section {
                 HStack {
-                    Text("Platform")
+                    Text("Token")
                     Spacer()
                     Picker("", selection: $quipDomain) {
                         ForEach(QuipDomain.allCases) { d in
