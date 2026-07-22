@@ -144,8 +144,8 @@ struct SettingsPanel: View {
                         HStack {
                             Text("What does this do?")
                             Spacer()
-                            Image(systemName: "chevron.right")
-                                .rotationEffect(.degrees(showDescription ? 90 : 0))
+                            Image(systemName: "chevron.left")
+                                .rotationEffect(.degrees(showDescription ? -90 : 0))
                         }
                         .contentShape(Rectangle())
                     }
