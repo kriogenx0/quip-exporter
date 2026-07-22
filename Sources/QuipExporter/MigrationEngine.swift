@@ -33,6 +33,7 @@ func run(
     blobCache: URL,
     confirm: ((String, [String], Bool) async -> ExportDestination?)? = nil,
     confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)? = nil,
+    notifyAuthFailure: (String) async -> Void = { _ in },
     count: (RunEvent) async -> Void = { _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async {
@@ -40,7 +41,9 @@ func run(
 
     let user: QuipCurrentUserResponse
     do { user = try await client.getCurrentUser() } catch {
-        await log("Auth failed: \(error.localizedDescription)", .error); return
+        await log("Auth failed: \(error.localizedDescription)", .error)
+        if case MigrationError.notAuthorized = error { await notifyAuthFailure(error.localizedDescription) }
+        return
     }
     await log("Authenticated as: \(user.name)", .info)
 
@@ -87,6 +90,7 @@ func run(
 
     if authGuard.stopped {
         await log("Stopped: the Quip token was rejected (expired or revoked).", .error)
+        await notifyAuthFailure(authGuard.failureReason ?? "The Quip token was rejected.")
     } else {
         await log("Done. Migrated \(visitedThreads.count) documents across \(visitedFolders.count) folders.", .info)
     }
@@ -101,13 +105,16 @@ func scan(
     deleteAfterCopy: Bool,
     notesAccount: String,
     exportFolder: URL?,
+    notifyAuthFailure: (String) async -> Void = { _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async -> ScanSummary? {
     await log("Scanning Quip account...", .info)
 
     let user: QuipCurrentUserResponse
     do { user = try await client.getCurrentUser() } catch {
-        await log("Auth failed: \(error.localizedDescription)", .error); return nil
+        await log("Auth failed: \(error.localizedDescription)", .error)
+        if case MigrationError.notAuthorized = error { await notifyAuthFailure(error.localizedDescription) }
+        return nil
     }
     await log("Authenticated as: \(user.name)", .info)
 
@@ -153,6 +160,7 @@ func scan(
 
     if authGuard.stopped {
         await log("Scan stopped: the Quip token was rejected (expired or revoked).", .error)
+        await notifyAuthFailure(authGuard.failureReason ?? "The Quip token was rejected.")
         return nil
     }
 
@@ -192,12 +200,11 @@ private func migrateFolder(
     do { data = try await client.getFolder(folderId) } catch {
         await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error)
         await count(.error)
-        if let code = authStatusCode(error), authGuard.recordFailure(statusCode: code) {
-            await log("Token appears to be invalid or expired — stopping migration.", .error)
+        if case MigrationError.notAuthorized = error {
+            authGuard.stop(reason: error.localizedDescription)
         }
         return
     }
-    authGuard.recordSuccess()
 
     let folderTitle = data.folder.title
     let nextMdPath = skippedInFiles.contains(folderTitle) ? mdPath : mdPath + [folderTitle]
@@ -287,12 +294,11 @@ private func migrateThread(
     do { data = try await client.getThread(threadId) } catch {
         await log("Failed to fetch thread \(threadId): \(error.localizedDescription)", .error)
         await count(.error)
-        if let code = authStatusCode(error), authGuard.recordFailure(statusCode: code) {
-            await log("Token appears to be invalid or expired — stopping migration.", .error)
+        if case MigrationError.notAuthorized = error {
+            authGuard.stop(reason: error.localizedDescription)
         }
         return
     }
-    authGuard.recordSuccess()
 
     let thread = data.thread
     let title = thread.title
@@ -598,12 +604,11 @@ private func scanFolder(
     let data: QuipFolderResponse
     do { data = try await client.getFolder(folderId) } catch {
         await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error)
-        if let code = authStatusCode(error), authGuard.recordFailure(statusCode: code) {
-            await log("Token appears to be invalid or expired — stopping scan.", .error)
+        if case MigrationError.notAuthorized = error {
+            authGuard.stop(reason: error.localizedDescription)
         }
         return
     }
-    authGuard.recordSuccess()
 
     let folderTitle = data.folder.title
     let nextMdPath = skippedInFiles.contains(folderTitle) ? mdPath : mdPath + [folderTitle]
@@ -663,12 +668,11 @@ private func scanThread(
     let data: QuipThreadResponse
     do { data = try await client.getThread(threadId) } catch {
         await log("Failed to fetch thread \(threadId): \(error.localizedDescription)", .error)
-        if let code = authStatusCode(error), authGuard.recordFailure(statusCode: code) {
-            await log("Token appears to be invalid or expired — stopping scan.", .error)
+        if case MigrationError.notAuthorized = error {
+            authGuard.stop(reason: error.localizedDescription)
         }
         return
     }
-    authGuard.recordSuccess()
 
     let thread = data.thread
     let title = thread.title
@@ -777,11 +781,6 @@ private func resolveExisting(
     case .skip: return .skip
     case .stop: return .stop
     }
-}
-
-private func authStatusCode(_ error: Error) -> Int? {
-    guard case let MigrationError.api(statusCode, _, _) = error else { return nil }
-    return (statusCode == 401 || statusCode == 403) ? statusCode : nil
 }
 
 private func isShared(thread: QuipThreadInfo, currentUserId: String) -> Bool {

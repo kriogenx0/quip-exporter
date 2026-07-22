@@ -8,6 +8,19 @@ actor QuipClient {
     private let cacheDir: URL
     private let cacheTTL: TimeInterval = 24 * 60 * 60
 
+    // Just enough of Quip's error body to tell a dead token ("not_authorized") apart
+    // from a plain per-item permission error (returned as "application_error").
+    private struct QuipErrorBody: Decodable { let error: String? }
+
+    private func apiError(statusCode: Int, path: String, data: Data) -> Error {
+        let body = String(data: data, encoding: .utf8) ?? ""
+        let errorField = try? JSONDecoder().decode(QuipErrorBody.self, from: data).error
+        if statusCode == 401 || errorField == "not_authorized" {
+            return MigrationError.notAuthorized(path: path, body: body)
+        }
+        return MigrationError.api(statusCode: statusCode, path: path, body: body)
+    }
+
     init(token: String, rateDelay: TimeInterval, domain: QuipDomain = .quipApple) {
         self.token = token
         self.rateDelay = rateDelay
@@ -82,8 +95,7 @@ actor QuipClient {
         try await Task.sleep(for: .seconds(rateDelay))
         let (data, http) = try await send(authRequest(path))
         if http.statusCode != 200 {
-            throw MigrationError.api(statusCode: http.statusCode, path: path,
-                                     body: String(data: data, encoding: .utf8) ?? "")
+            throw apiError(statusCode: http.statusCode, path: path, data: data)
         }
         writeCache(path, data)
         return try JSONDecoder().decode(T.self, from: data)
@@ -93,8 +105,7 @@ actor QuipClient {
         try await Task.sleep(for: .seconds(rateDelay))
         let (data, http) = try await send(authRequest(path))
         if http.statusCode != 200 {
-            throw MigrationError.api(statusCode: http.statusCode, path: path,
-                                     body: String(data: data, encoding: .utf8) ?? "")
+            throw apiError(statusCode: http.statusCode, path: path, data: data)
         }
         return data
     }

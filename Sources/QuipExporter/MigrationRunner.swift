@@ -53,6 +53,19 @@ private func diffAccessoryView(_ text: String) -> NSScrollView {
     return scrollView
 }
 
+// Shown when Quip flags the token itself as invalid — as opposed to a plain per-item
+// permission error, which just gets skipped and logged.
+private func notifyAuthFailure(_ message: String) async {
+    await MainActor.run {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Quip token rejected"
+        alert.informativeText = "\(message)\n\nGet a fresh token and try again."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+}
+
 @MainActor
 class MigrationRunner: ObservableObject {
     @Published var logEntries: [LogEntry] = []
@@ -197,6 +210,7 @@ class MigrationRunner: ObservableObject {
                 blobCache: blobCache,
                 confirm: confirm,
                 confirmOverwrite: confirmOverwrite,
+                notifyAuthFailure: notifyAuthFailure,
                 count: count,
                 log: log
             )
@@ -237,6 +251,7 @@ class MigrationRunner: ObservableObject {
                 deleteAfterCopy: deleteAfterCopy,
                 notesAccount: notesAccount,
                 exportFolder: exportFolder,
+                notifyAuthFailure: notifyAuthFailure,
                 log: log
             )
 
