@@ -90,21 +90,15 @@ struct SettingsPanel: View {
                             Text(d.rawValue).tag(d)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .fixedSize()
-                }
-
-                HStack {
-                    Text("Quip Token").font(.headline)
-                    Spacer()
                     Link("Get token", destination: quipDomain.tokenURL)
                         .font(.body)
                 }
 
                 HStack {
-                    Text("Paste Token")
-
                     TokenField(text: $quipToken, isSecure: !showToken)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .frame(height: 22)
 
                     Button { showToken.toggle() } label: {
@@ -125,7 +119,7 @@ struct SettingsPanel: View {
                             Text(d.rawValue).tag(d)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .fixedSize()
                 }
 
@@ -137,7 +131,7 @@ struct SettingsPanel: View {
                             Text(d.rawValue).tag(d)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .fixedSize()
                 }
 
@@ -290,9 +284,35 @@ struct ControlBar: View {
                     Button("Save Log") { saveLog() }
                     Button("Clear Log") { runner.logEntries = [] }
                 }
-                if !runner.isRunning && !quipToken.isEmpty {
-                    Button("Scan") {
-                        runner.scanAccount(
+                if !runner.isRunning && (documentDestination == .appleNotes || spreadsheetDestination == .appleNotes) {
+                    Button("Create Test Note") {
+                        runner.runFormattingTest(notesAccount: notesAccount)
+                    }
+                }
+            }
+
+            // Buttons centered independently
+            if runner.isRunning {
+                Button("Stop", role: .destructive) { runner.stop() }
+                    .keyboardShortcut(.escape, modifiers: [])
+            } else {
+                HStack {
+                    if !quipToken.isEmpty {
+                        Button("Scan") {
+                            runner.scanAccount(
+                                token: quipToken,
+                                domain: quipDomain,
+                                documentDestination: documentDestination,
+                                spreadsheetDestination: spreadsheetDestination,
+                                deleteAfterCopy: deleteAfterCopy,
+                                rateDelay: 0.5,
+                                notesAccount: notesAccount,
+                                exportFolder: exportFolder
+                            )
+                        }
+                    }
+                    Button {
+                        runner.start(
                             token: quipToken,
                             domain: quipDomain,
                             documentDestination: documentDestination,
@@ -302,36 +322,12 @@ struct ControlBar: View {
                             notesAccount: notesAccount,
                             exportFolder: exportFolder
                         )
+                    } label: {
+                        Label("Start Exporting", systemImage: "arrow.down.circle.fill")
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canStart)
                 }
-                if !runner.isRunning && (documentDestination == .appleNotes || spreadsheetDestination == .appleNotes) {
-                    Button("Create Test Note") {
-                        runner.runFormattingTest(notesAccount: notesAccount)
-                    }
-                }
-            }
-
-            // Button centered independently
-            if runner.isRunning {
-                Button("Stop", role: .destructive) { runner.stop() }
-                    .keyboardShortcut(.escape, modifiers: [])
-            } else {
-                Button {
-                    runner.start(
-                        token: quipToken,
-                        domain: quipDomain,
-                        documentDestination: documentDestination,
-                        spreadsheetDestination: spreadsheetDestination,
-                        deleteAfterCopy: deleteAfterCopy,
-                        rateDelay: 0.5,
-                        notesAccount: notesAccount,
-                        exportFolder: exportFolder
-                    )
-                } label: {
-                    Label("Start Exporting", systemImage: "arrow.down.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canStart)
             }
         }
         .padding(.horizontal, 16)
