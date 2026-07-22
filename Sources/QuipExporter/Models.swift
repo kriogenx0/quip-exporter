@@ -39,6 +39,22 @@ struct ScanSummary {
     var toTrash = 0
 }
 
+// Tallies produced by a real run(), updated live via the `count` callback as each
+// folder/document is processed.
+struct RunSummary {
+    var foldersVisited = 0
+    var documentsTransferred = 0
+    var documentsUpdated = 0
+    var documentsUnchanged = 0
+    var documentsSkipped = 0
+    var documentsTrashed = 0
+    var errors = 0
+}
+
+enum RunEvent {
+    case folder, transferred, updated, unchanged, skipped, trashed, error
+}
+
 // MARK: - Quip API models
 
 struct QuipCurrentUserResponse: Decodable {

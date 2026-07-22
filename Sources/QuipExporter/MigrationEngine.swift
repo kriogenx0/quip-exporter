@@ -33,6 +33,7 @@ func run(
     blobCache: URL,
     confirm: ((String, [String], Bool) async -> ExportDestination?)? = nil,
     confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)? = nil,
+    count: (RunEvent) async -> Void = { _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async {
     await log("Fetching current user...", .info)
@@ -79,7 +80,7 @@ func run(
             blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, trashFolderId: trashFolderId,
             visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-            destinations: destinations, log: log
+            destinations: destinations, count: count, log: log
         )
     }
 
@@ -169,6 +170,7 @@ private func migrateFolder(
     visitedFolders: inout Set<String>,
     visitedThreads: inout Set<String>,
     destinations: DestinationConfig,
+    count: (RunEvent) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visitedFolders.contains(folderId), !Task.isCancelled else { return }
@@ -176,7 +178,8 @@ private func migrateFolder(
 
     let data: QuipFolderResponse
     do { data = try await client.getFolder(folderId) } catch {
-        await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error); return
+        await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error)
+        await count(.error); return
     }
 
     let folderTitle = data.folder.title
@@ -186,32 +189,38 @@ private func migrateFolder(
         : notesPath + [folderTitle]
 
     await log("Folder: \(nextMdPath.dropFirst().joined(separator: " / "))", .info)
+    await count(.folder)
 
     var dirs = WriterDirs()
 
     if let nw = writers.notes {
         do { dirs.notesFolderId = try nw.getOrCreateFolder(path: nextNotesPath) } catch {
-            await log("Failed to create Notes folder: \(error.localizedDescription)", .error); return
+            await log("Failed to create Notes folder: \(error.localizedDescription)", .error)
+            await count(.error); return
         }
     }
     if let mw = writers.markdown {
         do { dirs.markdownDir = try mw.ensureFolder(path: nextMdPath) } catch {
-            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
+            await log("Failed to create output folder: \(error.localizedDescription)", .error)
+            await count(.error); return
         }
     }
     if let hw = writers.html {
         do { dirs.htmlDir = try hw.ensureFolder(path: nextMdPath) } catch {
-            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
+            await log("Failed to create output folder: \(error.localizedDescription)", .error)
+            await count(.error); return
         }
     }
     if let nuw = writers.numbers {
         do { dirs.numbersDir = try nuw.ensureFolder(path: nextMdPath) } catch {
-            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
+            await log("Failed to create output folder: \(error.localizedDescription)", .error)
+            await count(.error); return
         }
     }
     if let cw = writers.csv {
         do { dirs.csvDir = try cw.ensureFolder(path: nextMdPath) } catch {
-            await log("Failed to create output folder: \(error.localizedDescription)", .error); return
+            await log("Failed to create output folder: \(error.localizedDescription)", .error)
+            await count(.error); return
         }
     }
 
@@ -223,7 +232,7 @@ private func migrateFolder(
                 client: client, writers: writers,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
-                visited: &visitedThreads, destinations: destinations, log: log
+                visited: &visitedThreads, destinations: destinations, count: count, log: log
             )
         } else if let childId = child.folderId {
             await migrateFolder(
@@ -232,7 +241,7 @@ private func migrateFolder(
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
                 visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-                destinations: destinations, log: log
+                destinations: destinations, count: count, log: log
             )
         }
     }
@@ -250,6 +259,7 @@ private func migrateThread(
     trashFolderId: String,
     visited: inout Set<String>,
     destinations: DestinationConfig,
+    count: (RunEvent) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visited.contains(threadId), !Task.isCancelled else { return }
@@ -257,7 +267,8 @@ private func migrateThread(
 
     let data: QuipThreadResponse
     do { data = try await client.getThread(threadId) } catch {
-        await log("Failed to fetch thread \(threadId): \(error.localizedDescription)", .error); return
+        await log("Failed to fetch thread \(threadId): \(error.localizedDescription)", .error)
+        await count(.error); return
     }
 
     let thread = data.thread
@@ -304,8 +315,8 @@ private func migrateThread(
             switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                           oldContent: oldBody, newContent: fullHtml,
                                           confirmOverwrite: destinations.confirmOverwrite) {
-            case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
-            case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+            case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
+            case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
             case .stop: return
             case .proceed(let update):
                 wasUpdate = update
@@ -316,7 +327,8 @@ private func migrateThread(
                 }
             }
         } catch {
-            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
+            await count(.error); return
         }
 
         if !checklistItems.isEmpty {
@@ -328,15 +340,18 @@ private func migrateThread(
         }
 
         let verb = wasUpdate ? "updated" : "copied"
+        await count(wasUpdate ? .updated : .transferred)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
                 let trashedTitle = "\(noteTitle) (Trashed in Quip)"
                 try nw.renameNote(oldTitle: noteTitle, newTitle: trashedTitle, folderId: folderId)
                 await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+                await count(.trashed)
             } catch {
                 await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
+                await count(.error)
             }
         } else {
             await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
@@ -360,8 +375,8 @@ private func migrateThread(
         switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                       oldContent: oldContent, newContent: newContent,
                                       confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
@@ -369,17 +384,21 @@ private func migrateThread(
         do {
             try mw.writeContent(newContent, title: noteTitle, dir: dir)
         } catch {
-            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
+            await count(.error); return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
+        await count(wasUpdate ? .updated : .transferred)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
                 await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+                await count(.trashed)
             } catch {
                 await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
+                await count(.error)
             }
         } else {
             await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
@@ -403,8 +422,8 @@ private func migrateThread(
         switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                       oldContent: oldContent, newContent: newContent,
                                       confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
@@ -412,17 +431,21 @@ private func migrateThread(
         do {
             try hw.writeContent(newContent, title: noteTitle, dir: dir)
         } catch {
-            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
+            await count(.error); return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
+        await count(wasUpdate ? .updated : .transferred)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
                 await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+                await count(.trashed)
             } catch {
                 await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
+                await count(.error)
             }
         } else {
             await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
@@ -439,7 +462,8 @@ private func migrateThread(
             sheets = try nuw.buildSheets(title: noteTitle, html: processedHtml, quipLink: quipLink,
                                           createdStr: createdStr, folderPath: notesPath)
         } catch {
-            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
+            await count(.error); return
         }
         // No existingPreviewText for Numbers (reading a .numbers file back requires opening
         // it in Numbers) — the confirmation still shows a preview of what would be written.
@@ -449,8 +473,8 @@ private func migrateThread(
         switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                       oldContent: nil, newContent: newContent,
                                       confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
@@ -458,17 +482,21 @@ private func migrateThread(
         do {
             try nuw.writeSheets(sheets, title: noteTitle, dir: dir)
         } catch {
-            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
+            await count(.error); return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
+        await count(wasUpdate ? .updated : .transferred)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
                 await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+                await count(.trashed)
             } catch {
                 await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
+                await count(.error)
             }
         } else {
             await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
@@ -485,7 +513,8 @@ private func migrateThread(
             sheets = try cw.buildSheets(title: noteTitle, html: processedHtml, quipLink: quipLink,
                                         createdStr: createdStr, folderPath: notesPath)
         } catch {
-            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
+            await count(.error); return
         }
         let newContent = SpreadsheetHTMLParser.previewText(sheets: sheets)
         let oldContent = exists ? cw.existingPreviewText(title: noteTitle, dir: dir) : nil
@@ -494,8 +523,8 @@ private func migrateThread(
         switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                       oldContent: oldContent, newContent: newContent,
                                       confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); return
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); return
+        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
+        case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
@@ -503,17 +532,21 @@ private func migrateThread(
         do {
             try cw.writeSheets(sheets, title: noteTitle, dir: dir)
         } catch {
-            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error); return
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
+            await count(.error); return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
+        await count(wasUpdate ? .updated : .transferred)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
                 await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+                await count(.trashed)
             } catch {
                 await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
                 await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
+                await count(.error)
             }
         } else {
             await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
