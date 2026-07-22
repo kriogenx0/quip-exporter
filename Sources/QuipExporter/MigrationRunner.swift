@@ -57,6 +57,7 @@ private func diffAccessoryView(_ text: String) -> NSScrollView {
 class MigrationRunner: ObservableObject {
     @Published var logEntries: [LogEntry] = []
     @Published var isRunning = false
+    @Published var runSummary = RunSummary()
 
     private var migrationTask: Task<Void, Never>?
 
@@ -78,6 +79,7 @@ class MigrationRunner: ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         logEntries = []
+        runSummary = RunSummary()
 
         let blobCache = self.blobCache
         migrationTask = Task.detached { [weak self] in
@@ -87,6 +89,21 @@ class MigrationRunner: ObservableObject {
                 let entry = LogEntry(message: msg, level: level)
                 guard let self else { return }
                 await MainActor.run { self.logEntries.append(entry) }
+            }
+
+            func count(_ event: RunEvent) async {
+                guard let self else { return }
+                await MainActor.run {
+                    switch event {
+                    case .folder: self.runSummary.foldersVisited += 1
+                    case .transferred: self.runSummary.documentsTransferred += 1
+                    case .updated: self.runSummary.documentsUpdated += 1
+                    case .unchanged: self.runSummary.documentsUnchanged += 1
+                    case .skipped: self.runSummary.documentsSkipped += 1
+                    case .trashed: self.runSummary.documentsTrashed += 1
+                    case .error: self.runSummary.errors += 1
+                    }
+                }
             }
 
             let confirm: ((String, [String], Bool) async -> ExportDestination?)?
@@ -176,6 +193,7 @@ class MigrationRunner: ObservableObject {
                 blobCache: blobCache,
                 confirm: confirm,
                 confirmOverwrite: confirmOverwrite,
+                count: count,
                 log: log
             )
             guard let self else { return }

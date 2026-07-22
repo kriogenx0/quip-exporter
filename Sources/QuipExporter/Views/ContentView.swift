@@ -43,7 +43,7 @@ struct ContentView: View {
 
             Divider()
 
-            LogPanel(entries: runner.logEntries)
+            ResultsPanel(runner: runner)
 
             Divider()
 
@@ -106,7 +106,6 @@ struct SettingsPanel: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-
                 }
             }
 
@@ -233,6 +232,69 @@ struct MigrationInfoBanner: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
+    }
+}
+
+// MARK: - Results (Summary / Logs)
+
+private enum ResultsTab: String, CaseIterable, Identifiable {
+    case summary = "Summary"
+    case logs = "Logs"
+    var id: String { rawValue }
+}
+
+struct ResultsPanel: View {
+    @ObservedObject var runner: MigrationRunner
+    @State private var tab: ResultsTab = .logs
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $tab) {
+                ForEach(ResultsTab.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 200)
+            .padding(.top, 8)
+
+            switch tab {
+            case .summary:
+                SummaryView(summary: runner.runSummary)
+            case .logs:
+                LogPanel(entries: runner.logEntries)
+            }
+        }
+    }
+}
+
+struct SummaryView: View {
+    let summary: RunSummary
+
+    private var rows: [(String, Int)] {
+        [
+            ("Folders found", summary.foldersVisited),
+            ("Documents transferred", summary.documentsTransferred),
+            ("Documents updated", summary.documentsUpdated),
+            ("Documents unchanged", summary.documentsUnchanged),
+            ("Documents skipped", summary.documentsSkipped),
+            ("Documents trashed in Quip", summary.documentsTrashed),
+            ("Errors", summary.errors),
+        ]
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(rows, id: \.0) { label, value in
+                    LabeledContent(label) {
+                        Text("\(value)")
+                            .foregroundStyle(label == "Errors" && value > 0 ? .red : .primary)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
