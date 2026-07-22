@@ -61,32 +61,16 @@ enum ResultsKind {
     case none, scan, export
 }
 
-// Watches for repeated 401/403 responses while a run/scan is in progress. A single
-// 403 can just mean one item lost its sharing permissions, but a 401 (token flatly
-// rejected) or several 403s in a row almost always means the token expired or was
-// revoked mid-run — in which case every remaining folder/thread fetch would otherwise
-// fail the same way, so we stop instead of grinding through the rest of the account.
+// Stops a run/scan the moment Quip signals the token itself is invalid — as opposed
+// to one item's sharing having changed, which just gets skipped and logged.
 final class AuthGuard {
     private(set) var stopped = false
-    private var consecutiveFailures = 0
+    private(set) var failureReason: String?
 
-    // Returns true the moment this failure trips the stop condition.
-    func recordFailure(statusCode: Int) -> Bool {
-        guard statusCode == 401 || statusCode == 403 else { return false }
-        if statusCode == 401 {
-            stopped = true
-            return true
-        }
-        consecutiveFailures += 1
-        if consecutiveFailures >= 2 {
-            stopped = true
-            return true
-        }
-        return false
-    }
-
-    func recordSuccess() {
-        consecutiveFailures = 0
+    func stop(reason: String) {
+        guard !stopped else { return }
+        stopped = true
+        failureReason = reason
     }
 }
 
@@ -163,11 +147,17 @@ struct QuipSharing: Decodable {
 
 enum MigrationError: Error, LocalizedError {
     case api(statusCode: Int, path: String, body: String)
+    // Quip's own signal that the access token is invalid/expired/revoked, as opposed to
+    // a plain 403 on one item whose sharing changed — distinguished by the JSON body's
+    // "error" field being "not_authorized" (or a bare 401), not by status code alone.
+    case notAuthorized(path: String, body: String)
 
     var errorDescription: String? {
         switch self {
         case .api(let code, let path, let body):
             return "Quip API \(code) for \(path): \(body)"
+        case .notAuthorized(let path, let body):
+            return "Not authorized for \(path): \(body)"
         }
     }
 }
