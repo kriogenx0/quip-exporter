@@ -53,19 +53,6 @@ private func diffAccessoryView(_ text: String) -> NSScrollView {
     return scrollView
 }
 
-// Shown when Quip flags the token itself as invalid — as opposed to a plain per-item
-// permission error, which just gets skipped and logged.
-private func notifyAuthFailure(_ message: String) async {
-    await MainActor.run {
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Quip token rejected"
-        alert.informativeText = "\(message)\n\nGet a fresh token and try again."
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-}
-
 @MainActor
 class MigrationRunner: ObservableObject {
     @Published var logEntries: [LogEntry] = []
@@ -73,6 +60,7 @@ class MigrationRunner: ObservableObject {
     @Published var runSummary = RunSummary()
     @Published var scanSummary: ScanSummary?
     @Published var resultsKind: ResultsKind = .none
+    @Published var authError: String?
 
     private var migrationTask: Task<Void, Never>?
 
@@ -96,6 +84,7 @@ class MigrationRunner: ObservableObject {
         logEntries = []
         runSummary = RunSummary()
         scanSummary = nil
+        authError = nil
         resultsKind = .export
 
         let blobCache = self.blobCache
@@ -106,6 +95,11 @@ class MigrationRunner: ObservableObject {
                 let entry = LogEntry(message: msg, level: level)
                 guard let self else { return }
                 await MainActor.run { self.logEntries.append(entry) }
+            }
+
+            func notifyAuthFailure(_ message: String) async {
+                guard let self else { return }
+                await MainActor.run { self.authError = message }
             }
 
             func count(_ event: RunEvent) async {
@@ -233,6 +227,7 @@ class MigrationRunner: ObservableObject {
         isRunning = true
         logEntries = []
         scanSummary = nil
+        authError = nil
         resultsKind = .scan
 
         migrationTask = Task.detached { [weak self] in
@@ -242,6 +237,11 @@ class MigrationRunner: ObservableObject {
                 let entry = LogEntry(message: msg, level: level)
                 guard let self else { return }
                 await MainActor.run { self.logEntries.append(entry) }
+            }
+
+            func notifyAuthFailure(_ message: String) async {
+                guard let self else { return }
+                await MainActor.run { self.authError = message }
             }
 
             let summary = await scan(

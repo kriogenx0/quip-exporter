@@ -275,12 +275,15 @@ struct ResultsPanel: View {
 
             switch tab {
             case .summary:
-                SummaryView(resultsKind: runner.resultsKind, summary: runner.runSummary, scanSummary: runner.scanSummary)
+                SummaryView(resultsKind: runner.resultsKind, summary: runner.runSummary, scanSummary: runner.scanSummary, authError: runner.authError)
             case .logs:
                 LogPanel(entries: runner.logEntries)
             }
         }
         .onChange(of: runner.scanSummary) { newValue in
+            if newValue != nil { tab = .summary }
+        }
+        .onChange(of: runner.authError) { newValue in
             if newValue != nil { tab = .summary }
         }
     }
@@ -290,6 +293,7 @@ struct SummaryView: View {
     let resultsKind: ResultsKind
     let summary: RunSummary
     let scanSummary: ScanSummary?
+    let authError: String?
 
     private var rows: [(String, Int)] {
         [
@@ -305,6 +309,12 @@ struct SummaryView: View {
 
     var body: some View {
         Form {
+            if let authError {
+                Section("Authentication Error") {
+                    Text(authError)
+                        .foregroundStyle(.red)
+                }
+            }
             switch resultsKind {
             case .scan:
                 Section("Scan Results") {
