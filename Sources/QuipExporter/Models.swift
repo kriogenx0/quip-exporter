@@ -55,6 +55,12 @@ enum RunEvent {
     case folder, transferred, updated, unchanged, skipped, trashed, error
 }
 
+// Which results the Summary tab should display — whichever action (scan or export)
+// ran most recently, so the tab keeps showing that data during the run and after it finishes.
+enum ResultsKind {
+    case none, scan, export
+}
+
 // Watches for repeated 401/403 responses while a run/scan is in progress. A single
 // 403 can just mean one item lost its sharing permissions, but a 401 (token flatly
 // rejected) or several 403s in a row almost always means the token expired or was

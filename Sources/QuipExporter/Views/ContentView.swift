@@ -275,7 +275,7 @@ struct ResultsPanel: View {
 
             switch tab {
             case .summary:
-                SummaryView(summary: runner.runSummary, scanSummary: runner.scanSummary)
+                SummaryView(resultsKind: runner.resultsKind, summary: runner.runSummary, scanSummary: runner.scanSummary)
             case .logs:
                 LogPanel(entries: runner.logEntries)
             }
@@ -287,6 +287,7 @@ struct ResultsPanel: View {
 }
 
 struct SummaryView: View {
+    let resultsKind: ResultsKind
     let summary: RunSummary
     let scanSummary: ScanSummary?
 
@@ -304,20 +305,24 @@ struct SummaryView: View {
 
     var body: some View {
         Form {
-            if let scanSummary {
+            switch resultsKind {
+            case .scan:
                 Section("Scan Results") {
-                    LabeledContent("Documents to transfer", value: "\(scanSummary.toTransfer)")
-                    LabeledContent("Documents to update", value: "\(scanSummary.toUpdate)")
-                    LabeledContent("Documents to trash in Quip after copying", value: "\(scanSummary.toTrash)")
+                    LabeledContent("Documents to transfer", value: "\(scanSummary?.toTransfer ?? 0)")
+                    LabeledContent("Documents to update", value: "\(scanSummary?.toUpdate ?? 0)")
+                    LabeledContent("Documents to trash in Quip after copying", value: "\(scanSummary?.toTrash ?? 0)")
                 }
-            }
-            Section {
-                ForEach(rows, id: \.0) { label, value in
-                    LabeledContent(label) {
-                        Text("\(value)")
-                            .foregroundStyle(label == "Errors" && value > 0 ? .red : .primary)
+            case .export:
+                Section("Export Results") {
+                    ForEach(rows, id: \.0) { label, value in
+                        LabeledContent(label) {
+                            Text("\(value)")
+                                .foregroundStyle(label == "Errors" && value > 0 ? .red : .primary)
+                        }
                     }
                 }
+            case .none:
+                EmptyView()
             }
         }
         .formStyle(.grouped)

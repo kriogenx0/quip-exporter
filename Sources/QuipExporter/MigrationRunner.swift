@@ -59,6 +59,7 @@ class MigrationRunner: ObservableObject {
     @Published var isRunning = false
     @Published var runSummary = RunSummary()
     @Published var scanSummary: ScanSummary?
+    @Published var resultsKind: ResultsKind = .none
 
     private var migrationTask: Task<Void, Never>?
 
@@ -82,6 +83,7 @@ class MigrationRunner: ObservableObject {
         logEntries = []
         runSummary = RunSummary()
         scanSummary = nil
+        resultsKind = .export
 
         let blobCache = self.blobCache
         migrationTask = Task.detached { [weak self] in
@@ -217,6 +219,7 @@ class MigrationRunner: ObservableObject {
         isRunning = true
         logEntries = []
         scanSummary = nil
+        resultsKind = .scan
 
         migrationTask = Task.detached { [weak self] in
             let client = QuipClient(token: token, rateDelay: rateDelay, domain: domain)
