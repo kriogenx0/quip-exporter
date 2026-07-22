@@ -70,7 +70,7 @@ struct SettingsPanel: View {
     @Binding var exportFolder: URL?
     let isRunning: Bool
     @State private var showToken = false
-    @State private var showDescription = false
+    @State private var showDescription = true
 
     private var needsExportFolder: Bool {
         documentDestination != .appleNotes || spreadsheetDestination != .appleNotes
@@ -137,22 +137,40 @@ struct SettingsPanel: View {
 
                 Toggle("Delete private Quip documents after copying", isOn: $deleteAfterCopy)
 
-                DisclosureGroup("What does this do?", isExpanded: $showDescription) {
-                    Text(migrationDescription(
-                        documentDestination: documentDestination,
-                        spreadsheetDestination: spreadsheetDestination,
-                        deleteAfterCopy: deleteAfterCopy,
-                        notesAccount: notesAccount,
-                        exportFolder: exportFolder
-                    ))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Button {
+                        withAnimation { showDescription.toggle() }
+                    } label: {
+                        HStack {
+                            Text("What does this do?")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .rotationEffect(.degrees(showDescription ? 90 : 0))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    if showDescription {
+                        Text(migrationDescription(
+                            documentDestination: documentDestination,
+                            spreadsheetDestination: spreadsheetDestination,
+                            deleteAfterCopy: deleteAfterCopy,
+                            notesAccount: notesAccount,
+                            exportFolder: exportFolder
+                        ))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
         .formStyle(.grouped)
         .disabled(isRunning)
         .padding(.horizontal, 4)
+        .onChange(of: isRunning) { newValue in
+            if newValue { showDescription = false }
+        }
     }
 }
 
