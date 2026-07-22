@@ -55,6 +55,35 @@ enum RunEvent {
     case folder, transferred, updated, unchanged, skipped, trashed, error
 }
 
+// Watches for repeated 401/403 responses while a run/scan is in progress. A single
+// 403 can just mean one item lost its sharing permissions, but a 401 (token flatly
+// rejected) or several 403s in a row almost always means the token expired or was
+// revoked mid-run — in which case every remaining folder/thread fetch would otherwise
+// fail the same way, so we stop instead of grinding through the rest of the account.
+final class AuthGuard {
+    private(set) var stopped = false
+    private var consecutiveFailures = 0
+
+    // Returns true the moment this failure trips the stop condition.
+    func recordFailure(statusCode: Int) -> Bool {
+        guard statusCode == 401 || statusCode == 403 else { return false }
+        if statusCode == 401 {
+            stopped = true
+            return true
+        }
+        consecutiveFailures += 1
+        if consecutiveFailures >= 2 {
+            stopped = true
+            return true
+        }
+        return false
+    }
+
+    func recordSuccess() {
+        consecutiveFailures = 0
+    }
+}
+
 // MARK: - Quip API models
 
 struct QuipCurrentUserResponse: Decodable {
