@@ -22,10 +22,9 @@ actor QuipClient {
         return req
     }
 
-    // Quip returns 429 when its rate limit is exceeded, optionally with a `Retry-After`
-    // header telling us how long to wait. Retrying with backoff here (instead of treating
-    // 429 as a hard failure like every other non-200 status) keeps large exports going
-    // through transient rate-limit windows instead of aborting the whole run.
+    // Quip signals its rate limit two ways: a 429, or a 503 whose body reads
+    // {"error_code":503,"error_description":"Over Rate Limit..."} — both get the same
+    // Retry-After-aware backoff instead of failing the whole run outright.
     private let maxRetries = 5
 
     private func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
@@ -35,7 +34,9 @@ actor QuipClient {
             guard let http = resp as? HTTPURLResponse else {
                 throw MigrationError.api(statusCode: -1, path: req.url?.path ?? "", body: "")
             }
-            if http.statusCode == 429, attempt < maxRetries {
+            let isRateLimited = http.statusCode == 429
+                || (http.statusCode == 503 && String(data: data, encoding: .utf8)?.contains("Rate Limit") == true)
+            if isRateLimited, attempt < maxRetries {
                 try await Task.sleep(for: .seconds(retryDelay(after: http, attempt: attempt)))
                 attempt += 1
                 continue
