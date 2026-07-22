@@ -33,7 +33,7 @@ enum OverwriteChoice {
 }
 
 // Tallies produced by a read-only scan of the Quip account, without writing anything.
-struct ScanSummary {
+struct ScanSummary: Equatable {
     var toTransfer = 0
     var toUpdate = 0
     var toTrash = 0
