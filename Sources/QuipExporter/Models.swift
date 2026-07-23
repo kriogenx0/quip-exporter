@@ -32,6 +32,12 @@ enum OverwriteChoice {
     case overwrite, skip, stop
 }
 
+// Result of manually re-checking a token via the "Test Token" button.
+struct TokenTestResult {
+    let succeeded: Bool
+    let message: String
+}
+
 // Tallies produced by a read-only scan of the Quip account, without writing anything.
 struct ScanSummary: Equatable {
     var toTransfer = 0
