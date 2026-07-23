@@ -61,6 +61,7 @@ class MigrationRunner: ObservableObject {
     @Published var scanSummary: ScanSummary?
     @Published var resultsKind: ResultsKind = .none
     @Published var authError: String?
+    @Published var tokenTestResult: TokenTestResult?
 
     private var migrationTask: Task<Void, Never>?
 
@@ -268,6 +269,23 @@ class MigrationRunner: ObservableObject {
         migrationTask = nil
         logEntries.append(LogEntry(message: "Migration stopped by user.", level: .warning))
         isRunning = false
+    }
+
+    func testToken(token: String, domain: QuipDomain) {
+        tokenTestResult = nil
+        Task { [weak self] in
+            let client = QuipClient(token: token, rateDelay: 0, domain: domain)
+            do {
+                let user = try await client.getCurrentUser()
+                await MainActor.run {
+                    self?.tokenTestResult = TokenTestResult(succeeded: true, message: "Token is valid — signed in as \(user.name).")
+                }
+            } catch {
+                await MainActor.run {
+                    self?.tokenTestResult = TokenTestResult(succeeded: false, message: error.localizedDescription)
+                }
+            }
+        }
     }
 
     func runFormattingTest(notesAccount: String) {

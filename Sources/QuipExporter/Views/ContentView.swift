@@ -33,13 +33,15 @@ struct ContentView: View {
                 deleteAfterCopy: $deleteAfterCopy,
                 notesAccount: $notesAccount,
                 exportFolder: exportFolder,
-                isRunning: runner.isRunning
+                isRunning: runner.isRunning,
+                tokenTestResult: runner.tokenTestResult,
+                onTestToken: { runner.testToken(token: quipToken, domain: quipDomain) }
             )
             .fixedSize(horizontal: false, vertical: true)
 
             Divider()
 
-            ResultsPanel(runner: runner)
+            ResultsPanel(runner: runner, quipDomain: quipDomain)
 
             Divider()
 
@@ -69,6 +71,8 @@ struct SettingsPanel: View {
     @Binding var notesAccount: String
     @Binding var exportFolder: URL?
     let isRunning: Bool
+    let tokenTestResult: TokenTestResult?
+    let onTestToken: () -> Void
     @State private var showToken = false
     @State private var showDescription = true
 
@@ -103,6 +107,14 @@ struct SettingsPanel: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
+
+                    Button("Test Token") { onTestToken() }
+                }
+
+                if let tokenTestResult {
+                    Text(tokenTestResult.message)
+                        .foregroundStyle(tokenTestResult.succeeded ? .green : .red)
+                        .font(.callout)
                 }
             }
 
@@ -261,6 +273,7 @@ private enum ResultsTab: String, CaseIterable, Identifiable {
 
 struct ResultsPanel: View {
     @ObservedObject var runner: MigrationRunner
+    let quipDomain: QuipDomain
     @State private var tab: ResultsTab = .logs
 
     var body: some View {
@@ -275,7 +288,13 @@ struct ResultsPanel: View {
 
             switch tab {
             case .summary:
-                SummaryView(resultsKind: runner.resultsKind, summary: runner.runSummary, scanSummary: runner.scanSummary, authError: runner.authError)
+                SummaryView(
+                    resultsKind: runner.resultsKind,
+                    summary: runner.runSummary,
+                    scanSummary: runner.scanSummary,
+                    authError: runner.authError,
+                    quipDomain: quipDomain
+                )
             case .logs:
                 LogPanel(entries: runner.logEntries)
             }
@@ -294,6 +313,7 @@ struct SummaryView: View {
     let summary: RunSummary
     let scanSummary: ScanSummary?
     let authError: String?
+    let quipDomain: QuipDomain
 
     private var rows: [(String, Int)] {
         [
@@ -313,6 +333,15 @@ struct SummaryView: View {
                 Section("Authentication Error") {
                     Text(authError)
                         .foregroundStyle(.red)
+                    if authError.contains("Invalid access_token") {
+                        HStack {
+                            Spacer()
+                            Button("Get Token") {
+                                NSWorkspace.shared.open(quipDomain.tokenURL)
+                            }
+                            Spacer()
+                        }
+                    }
                 }
             }
             switch resultsKind {
