@@ -117,6 +117,7 @@ struct SettingsPanel: View {
                         .font(.callout)
                 }
             }
+            .disabled(isRunning)
 
             Section {
                 HStack {
@@ -148,7 +149,10 @@ struct SettingsPanel: View {
                 }
 
                 Toggle("Delete private Quip documents after copying", isOn: $deleteAfterCopy)
+            }
+            .disabled(isRunning)
 
+            Section {
                 VStack(alignment: .leading, spacing: 4) {
                     Button {
                         withAnimation { showDescription.toggle() }
@@ -176,9 +180,9 @@ struct SettingsPanel: View {
                     }
                 }
             }
+            .disabled(false)
         }
         .formStyle(.grouped)
-        .disabled(isRunning)
         .padding(.horizontal, 4)
         .onChange(of: isRunning) { newValue in
             if newValue { showDescription = false }
