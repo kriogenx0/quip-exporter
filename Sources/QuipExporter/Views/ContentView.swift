@@ -411,7 +411,7 @@ struct ControlBar: View {
             HStack {
                 if runner.isRunning {
                     ProgressView().scaleEffect(0.7)
-                    Text("Migrating…").foregroundStyle(.secondary)
+                    Text(runner.resultsKind == .scan ? "Scanning…" : "Migrating…").foregroundStyle(.secondary)
                 } else {
                     Text(runner.logEntries.isEmpty ? " " : "\(runner.logEntries.count) log entries")
                         .foregroundStyle(.secondary)
