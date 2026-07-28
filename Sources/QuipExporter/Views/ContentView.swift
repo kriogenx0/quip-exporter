@@ -274,7 +274,7 @@ private enum ResultsTab: String, CaseIterable, Identifiable {
 struct ResultsPanel: View {
     @ObservedObject var runner: MigrationRunner
     let quipDomain: QuipDomain
-    @State private var tab: ResultsTab = .logs
+    @State private var tab: ResultsTab = .summary
 
     var body: some View {
         VStack(spacing: 0) {
