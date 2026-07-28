@@ -67,8 +67,8 @@ enum ResultsKind {
     case none, scan, export
 }
 
-// Stops a run/scan the moment Quip signals the token itself is invalid — as opposed
-// to one item's sharing having changed, which just gets skipped and logged.
+// Stops a run/scan the moment Quip signals the token is rejected — either the token
+// itself is invalid, or a folder/thread comes back "Not authorized" — and prompts the user.
 final class AuthGuard {
     private(set) var stopped = false
     private(set) var failureReason: String?
@@ -153,9 +153,9 @@ struct QuipSharing: Decodable {
 
 enum MigrationError: Error, LocalizedError {
     case api(statusCode: Int, path: String, body: String)
-    // Quip's own signal that the access token is invalid/expired/revoked, as opposed to
-    // a plain 403 on one item whose sharing changed — distinguished by the JSON body's
-    // "error" field being "not_authorized" (or a bare 401), not by status code alone.
+    // Either Quip's own signal that the access token is invalid/expired/revoked, or a
+    // 403 "Not authorized" on a specific folder/thread — both stop the run and prompt
+    // the user, since either way nothing more can be fetched with this token/access.
     case notAuthorized(path: String, body: String)
 
     var errorDescription: String? {

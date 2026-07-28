@@ -8,14 +8,25 @@ actor QuipClient {
     private let cacheDir: URL
     private let cacheTTL: TimeInterval = 24 * 60 * 60
 
-    // Just enough of Quip's error body to tell a dead token ("not_authorized") apart
-    // from a plain per-item permission error (returned as "application_error").
-    private struct QuipErrorBody: Decodable { let error: String? }
+    // Just enough of Quip's error body to tell a dead/rejected token apart from other
+    // API errors — either a bare "not_authorized" error, or a 403 "application_error"
+    // whose description is "Not authorized" (optionally suffixed with the item's id).
+    private struct QuipErrorBody: Decodable {
+        let error: String?
+        let errorDescription: String?
+        enum CodingKeys: String, CodingKey {
+            case error
+            case errorDescription = "error_description"
+        }
+    }
 
     private func apiError(statusCode: Int, path: String, data: Data) -> Error {
         let body = String(data: data, encoding: .utf8) ?? ""
-        let errorField = try? JSONDecoder().decode(QuipErrorBody.self, from: data).error
-        if statusCode == 401 || errorField == "not_authorized" {
+        let decoded = try? JSONDecoder().decode(QuipErrorBody.self, from: data)
+        let isNotAuthorized = statusCode == 401
+            || decoded?.error == "not_authorized"
+            || (statusCode == 403 && decoded?.errorDescription?.hasPrefix("Not authorized") == true)
+        if isNotAuthorized {
             return MigrationError.notAuthorized(path: path, body: body)
         }
         return MigrationError.api(statusCode: statusCode, path: path, body: body)
