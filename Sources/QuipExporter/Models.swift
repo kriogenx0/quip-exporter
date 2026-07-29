@@ -47,6 +47,14 @@ struct TokenTestResult {
     let message: String
 }
 
+// A single file (or Apple Notes note) written during a real export run, for display in
+// the Files tab.
+struct CopiedFile: Identifiable, Equatable {
+    let id = UUID()
+    let directory: String
+    let file: String
+}
+
 // Tallies produced by a read-only scan of the Quip account, without writing anything.
 struct ScanSummary: Equatable {
     var toTransfer = 0
