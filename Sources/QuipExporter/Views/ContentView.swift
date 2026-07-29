@@ -97,14 +97,31 @@ struct SettingsPanel: View {
                     }
                     .pickerStyle(.menu)
                     .fixedSize()
-                    Link("Get token", destination: quipDomain.tokenURL)
-                        .font(.body)
+                    Button("Get Token") {
+                        NSWorkspace.shared.open(quipDomain.tokenURL)
+                    }
                 }
 
                 HStack {
                     TokenField(text: $quipToken, isSecure: !showToken)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .frame(height: 22)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
+                        )
+
+                    Button {
+                        if let pasted = NSPasteboard.general.string(forType: .string) {
+                            quipToken = pasted
+                        }
+                    } label: {
+                        Image(systemName: "doc.on.clipboard")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
 
                     Button { showToken.toggle() } label: {
                         Image(systemName: showToken ? "eye.slash" : "eye")
