@@ -6,6 +6,7 @@ struct ContentView: View {
     @AppStorage("documentDestination") private var documentDestination: ExportDestination = .appleNotes
     @AppStorage("spreadsheetDestination") private var spreadsheetDestination: ExportDestination = .appleNotes
     @AppStorage("deleteAfterCopy") private var deleteAfterCopy = false
+    @AppStorage("existingFileBehavior") private var existingFileBehavior: ExistingFileBehavior = .ask
     @AppStorage("notesAccount") private var notesAccount = ""
     @AppStorage("exportFolderPath") private var exportFolderPath = Self.defaultExportFolderPath
 
@@ -31,6 +32,7 @@ struct ContentView: View {
                 documentDestination: $documentDestination,
                 spreadsheetDestination: $spreadsheetDestination,
                 deleteAfterCopy: $deleteAfterCopy,
+                existingFileBehavior: $existingFileBehavior,
                 notesAccount: $notesAccount,
                 exportFolder: exportFolder,
                 isRunning: runner.isRunning,
@@ -52,6 +54,7 @@ struct ContentView: View {
                 documentDestination: documentDestination,
                 spreadsheetDestination: spreadsheetDestination,
                 deleteAfterCopy: deleteAfterCopy,
+                existingFileBehavior: existingFileBehavior,
                 notesAccount: notesAccount,
                 exportFolder: exportFolder.wrappedValue
             )
@@ -68,6 +71,7 @@ struct SettingsPanel: View {
     @Binding var documentDestination: ExportDestination
     @Binding var spreadsheetDestination: ExportDestination
     @Binding var deleteAfterCopy: Bool
+    @Binding var existingFileBehavior: ExistingFileBehavior
     @Binding var notesAccount: String
     @Binding var exportFolder: URL?
     let isRunning: Bool
@@ -148,6 +152,18 @@ struct SettingsPanel: View {
                     FolderPickerRow(label: "Export Folder", url: $exportFolder)
                 }
 
+                HStack {
+                    Text("If file already exists")
+                    Spacer()
+                    Picker("", selection: $existingFileBehavior) {
+                        ForEach(ExistingFileBehavior.allCases) { b in
+                            Text(b.rawValue).tag(b)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                }
+
                 Toggle("Delete private Quip documents after copying", isOn: $deleteAfterCopy)
             }
             .disabled(isRunning)
@@ -172,6 +188,7 @@ struct SettingsPanel: View {
                             documentDestination: documentDestination,
                             spreadsheetDestination: spreadsheetDestination,
                             deleteAfterCopy: deleteAfterCopy,
+                            existingFileBehavior: existingFileBehavior,
                             notesAccount: notesAccount,
                             exportFolder: exportFolder
                         ))
@@ -241,6 +258,7 @@ private func migrationDescription(
     documentDestination: ExportDestination,
     spreadsheetDestination: ExportDestination,
     deleteAfterCopy: Bool,
+    existingFileBehavior: ExistingFileBehavior,
     notesAccount: String,
     exportFolder: URL?
 ) -> String {
@@ -262,6 +280,14 @@ private func migrationDescription(
     if spreadsheetDestination != .ask { skipNote.append("spreadsheets") }
     if !skipNote.isEmpty {
         parts.append("Already-exported \(skipNote.joined(separator: " and ")) are skipped on re-runs.")
+        switch existingFileBehavior {
+        case .ask:
+            parts.append("If one has changed since, you'll be asked whether to overwrite it.")
+        case .overwrite:
+            parts.append("If one has changed since, it's automatically overwritten with the latest version from Quip.")
+        case .ignore:
+            parts.append("If one has changed since, it's left as-is.")
+        }
     }
 
     return parts.joined(separator: " ")
@@ -393,6 +419,7 @@ struct ControlBar: View {
     let documentDestination: ExportDestination
     let spreadsheetDestination: ExportDestination
     let deleteAfterCopy: Bool
+    let existingFileBehavior: ExistingFileBehavior
     let notesAccount: String
     let exportFolder: URL?
 
@@ -457,7 +484,8 @@ struct ControlBar: View {
                             deleteAfterCopy: deleteAfterCopy,
                             rateDelay: 0.5,
                             notesAccount: notesAccount,
-                            exportFolder: exportFolder
+                            exportFolder: exportFolder,
+                            existingFileBehavior: existingFileBehavior
                         )
                     } label: {
                         Label("Start Exporting", systemImage: "arrow.down.circle.fill")

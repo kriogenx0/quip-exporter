@@ -32,6 +32,15 @@ enum OverwriteChoice {
     case overwrite, skip, stop
 }
 
+// How to handle a document/spreadsheet that already exists in the destination and
+// differs from the Quip version — set once in Settings instead of per-item.
+enum ExistingFileBehavior: String, CaseIterable, Identifiable {
+    case ask = "Ask"
+    case overwrite = "Overwrite"
+    case ignore = "Ignore"
+    var id: String { rawValue }
+}
+
 // Result of manually re-checking a token via the "Test Token" button.
 struct TokenTestResult {
     let succeeded: Bool
