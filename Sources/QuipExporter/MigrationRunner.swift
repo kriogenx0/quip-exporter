@@ -78,7 +78,8 @@ class MigrationRunner: ObservableObject {
         deleteAfterCopy: Bool,
         rateDelay: Double,
         notesAccount: String,
-        exportFolder: URL?
+        exportFolder: URL?,
+        existingFileBehavior: ExistingFileBehavior
     ) {
         guard !isRunning else { return }
         isRunning = true
@@ -164,33 +165,41 @@ class MigrationRunner: ObservableObject {
                 confirm = nil
             }
 
-            let batch = OverwriteBatch()
-            let confirmOverwrite: (String, [String], String?, String?) async -> OverwriteChoice = { [weak self] title, path, oldContent, newContent in
-                if let choice = batch.choice { return choice }
-                return await MainActor.run { [weak self] in
-                    let alert = NSAlert()
-                    alert.messageText = "\"\(title)\" already exists"
-                    let sub = path.count > 1 ? path.dropFirst().joined(separator: " / ") : "Root folder"
-                    alert.informativeText = "\(sub)\n\nOverwrite it with the latest version from Quip, or skip it?"
-                    if let newContent {
-                        if let oldContent {
-                            alert.accessoryView = diffAccessoryView(unifiedDiff(old: oldContent, new: newContent))
-                        } else {
-                            alert.accessoryView = diffAccessoryView("(existing content can't be read for a diff — preview of what would be written)\n\n" + newContent)
+            let confirmOverwrite: (String, [String], String?, String?) async -> OverwriteChoice
+            switch existingFileBehavior {
+            case .overwrite:
+                confirmOverwrite = { _, _, _, _ in .overwrite }
+            case .ignore:
+                confirmOverwrite = { _, _, _, _ in .skip }
+            case .ask:
+                let batch = OverwriteBatch()
+                confirmOverwrite = { [weak self] title, path, oldContent, newContent in
+                    if let choice = batch.choice { return choice }
+                    return await MainActor.run { [weak self] in
+                        let alert = NSAlert()
+                        alert.messageText = "\"\(title)\" already exists"
+                        let sub = path.count > 1 ? path.dropFirst().joined(separator: " / ") : "Root folder"
+                        alert.informativeText = "\(sub)\n\nOverwrite it with the latest version from Quip, or skip it?"
+                        if let newContent {
+                            if let oldContent {
+                                alert.accessoryView = diffAccessoryView(unifiedDiff(old: oldContent, new: newContent))
+                            } else {
+                                alert.accessoryView = diffAccessoryView("(existing content can't be read for a diff — preview of what would be written)\n\n" + newContent)
+                            }
                         }
-                    }
-                    alert.addButton(withTitle: "Overwrite")
-                    alert.addButton(withTitle: "Overwrite All")
-                    alert.addButton(withTitle: "Skip")
-                    alert.addButton(withTitle: "Skip All")
-                    alert.addButton(withTitle: "Stop")
-                    let response = alert.runModal()
-                    switch response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue {
-                    case 0: return .overwrite
-                    case 1: batch.choice = .overwrite; return .overwrite
-                    case 2: return .skip
-                    case 3: batch.choice = .skip; return .skip
-                    default: self?.stop(); return .stop
+                        alert.addButton(withTitle: "Overwrite")
+                        alert.addButton(withTitle: "Overwrite All")
+                        alert.addButton(withTitle: "Skip")
+                        alert.addButton(withTitle: "Skip All")
+                        alert.addButton(withTitle: "Stop")
+                        let response = alert.runModal()
+                        switch response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue {
+                        case 0: return .overwrite
+                        case 1: batch.choice = .overwrite; return .overwrite
+                        case 2: return .skip
+                        case 3: batch.choice = .skip; return .skip
+                        default: self?.stop(); return .stop
+                        }
                     }
                 }
             }
