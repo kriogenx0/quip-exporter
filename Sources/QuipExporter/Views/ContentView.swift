@@ -309,6 +309,14 @@ struct ResultsPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if runner.isRunning {
+                HStack {
+                    ProgressView().scaleEffect(0.7)
+                    Text(runner.resultsKind == .scan ? "Scanning…" : "Migrating…").foregroundStyle(.secondary)
+                }
+                .padding(.top, 8)
+            }
+
             Picker("", selection: $tab) {
                 ForEach(ResultsTab.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -464,13 +472,8 @@ struct ControlBar: View {
         ZStack {
             // Status anchored to the leading edge
             HStack {
-                if runner.isRunning {
-                    ProgressView().scaleEffect(0.7)
-                    Text(runner.resultsKind == .scan ? "Scanning…" : "Migrating…").foregroundStyle(.secondary)
-                } else {
-                    Text(runner.logEntries.isEmpty ? " " : "\(runner.logEntries.count) log entries")
-                        .foregroundStyle(.secondary)
-                }
+                Text(runner.logEntries.isEmpty ? " " : "\(runner.logEntries.count) log entries")
+                    .foregroundStyle(.secondary)
                 Spacer()
                 if !runner.isRunning && !runner.logEntries.isEmpty {
                     Button("Save Log") { saveLog() }
