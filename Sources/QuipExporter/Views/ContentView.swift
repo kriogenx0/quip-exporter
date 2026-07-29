@@ -11,8 +11,8 @@ struct ContentView: View {
     @AppStorage("exportFolderPath") private var exportFolderPath = Self.defaultExportFolderPath
 
     private static var defaultExportFolderPath: String {
-        FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("QuipDocuments").path ?? ""
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("QuipDocuments").path
     }
 
     private var exportFolder: Binding<URL?> {
