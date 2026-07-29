@@ -188,10 +188,13 @@ enum NotesError: Error, LocalizedError {
 
 enum SpreadsheetError: Error, LocalizedError {
     case noTablesFound
+    case fileNotWritten(path: String)
 
     var errorDescription: String? {
         switch self {
         case .noTablesFound: return "No tables found in the spreadsheet HTML"
+        case .fileNotWritten(let path):
+            return "Numbers reported success but didn't write \(path) — the save may have been interrupted (e.g. by a dialog it couldn't dismiss on its own)."
         }
     }
 }

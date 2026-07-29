@@ -46,6 +46,11 @@ struct NumbersWriter {
         suppressWhereToSaveDialog()
         let script = buildScript(sheets: sheets, targetFile: targetFile)
         _ = try AppleScriptRunner.run(script)
+        // osascript exiting cleanly only means Numbers accepted the `save` command, not
+        // that the file actually landed — confirm it before reporting success.
+        guard FileManager.default.fileExists(atPath: targetFile.path) else {
+            throw SpreadsheetError.fileNotWritten(path: targetFile.path)
+        }
     }
 
     // Saving a brand-new iWork document via AppleScript can pop a "Where do you want to
