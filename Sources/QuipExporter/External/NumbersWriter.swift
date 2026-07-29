@@ -43,8 +43,19 @@ struct NumbersWriter {
     func writeSheets(_ sheets: [(name: String, rows: [[String]])], title: String, dir: URL) throws {
         let targetFile = dir.appendingPathComponent(sanitize(title) + ".numbers")
         try? FileManager.default.removeItem(at: targetFile)
+        suppressWhereToSaveDialog()
         let script = buildScript(sheets: sheets, targetFile: targetFile)
         _ = try AppleScriptRunner.run(script)
+    }
+
+    // Saving a brand-new iWork document via AppleScript can pop a "Where do you want to
+    // save this document?" (iCloud vs. this Mac) sheet that nothing here can dismiss —
+    // the script then hangs on `save` until AppleScriptRunner's timeout kills it, having
+    // never written the file. Numbers checks this preference itself before showing that
+    // sheet, so setting it once is enough to make every subsequent save go straight to
+    // the POSIX path we ask for.
+    private func suppressWhereToSaveDialog() {
+        UserDefaults(suiteName: "com.apple.iWork.Numbers")?.set(false, forKey: "ShowWhereToSaveDocumentDialog")
     }
 
     func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
@@ -55,10 +66,12 @@ struct NumbersWriter {
     // MARK: - AppleScript generation
 
     // Only one document is ever created (no per-sheet CSV import docs, no cross-document
-    // sheet copy), and its window is moved off-screen right away — Numbers has no headless
-    // mode, so a window briefly exists, but this is the closest to "don't open documents"
-    // AppleScript automation allows. Explicitly specifying the "Blank" template avoids the
-    // Template Chooser dialog `make new document` would otherwise show.
+    // sheet copy), so unlike the old cross-document `duplicate`-based approach there's no
+    // longer any need for the window to stay rendered — it's hidden outright rather than
+    // just moved off-screen, which depended on AppleScript's position ending up outside
+    // every display and reliably stuck flashing the window on some setups. Explicitly
+    // specifying the "Blank" template avoids the Template Chooser dialog `make new
+    // document` would otherwise show.
     private func buildScript(sheets: [(name: String, rows: [[String]])], targetFile: URL) -> String {
         var lines = ["tell application \"Numbers\""]
         lines.append("\tset doc1 to make new document with properties {document template:template \"Blank\"}")
@@ -66,7 +79,7 @@ struct NumbersWriter {
         lines.append("\t\tdelay 0.1")
         lines.append("\tend repeat")
         lines.append("\ttry")
-        lines.append("\t\tset position of window 1 of doc1 to {-2000, -2000}")
+        lines.append("\t\tset visible of window 1 of doc1 to false")
         lines.append("\tend try")
 
         for (index, sheet) in sheets.enumerated() {

@@ -1,7 +1,12 @@
 import Foundation
 
 enum AppleScriptRunner {
-    static func run(_ script: String) throws -> String {
+    // Without a timeout, a stuck script (e.g. a target app blocked on a modal dialog
+    // no one can click, such as iWork's "Where do you want to save this document?"
+    // sheet) hangs the whole migration run forever and leaves its document open —
+    // and every retry piles on another one. 3 minutes is generous for any single
+    // AppleScript call this app makes, including a large spreadsheet's worth of cells.
+    static func run(_ script: String, timeout: TimeInterval = 180) throws -> String {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".applescript")
         try script.write(to: tmp, atomically: true, encoding: .utf8)
@@ -13,7 +18,19 @@ enum AppleScriptRunner {
         proc.standardOutput = out
         proc.standardError = err
         try proc.run()
-        proc.waitUntilExit()
+
+        let exited = DispatchGroup()
+        exited.enter()
+        DispatchQueue.global().async {
+            proc.waitUntilExit()
+            exited.leave()
+        }
+        if exited.wait(timeout: .now() + timeout) == .timedOut {
+            proc.terminate()
+            saveFailedScript(script)
+            try? FileManager.default.removeItem(at: tmp)
+            throw NotesError.applescript("Timed out after \(Int(timeout))s waiting for a response — check for a dialog the app can't dismiss on its own.")
+        }
 
         if proc.terminationStatus != 0 {
             let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
