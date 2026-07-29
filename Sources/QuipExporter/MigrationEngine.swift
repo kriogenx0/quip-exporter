@@ -35,6 +35,7 @@ func run(
     confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)? = nil,
     notifyAuthFailure: (String) async -> Void = { _ in },
     count: (RunEvent) async -> Void = { _ in },
+    recordFile: (String, String) async -> Void = { _, _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async {
     await log("Fetching current user...", .info)
@@ -84,7 +85,7 @@ func run(
             blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, trashFolderId: trashFolderId,
             visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-            destinations: destinations, authGuard: authGuard, count: count, log: log
+            destinations: destinations, authGuard: authGuard, count: count, recordFile: recordFile, log: log
         )
     }
 
@@ -191,6 +192,7 @@ private func migrateFolder(
     destinations: DestinationConfig,
     authGuard: AuthGuard,
     count: (RunEvent) async -> Void,
+    recordFile: (String, String) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visitedFolders.contains(folderId), !Task.isCancelled, !authGuard.stopped else { return }
@@ -256,7 +258,7 @@ private func migrateFolder(
                 client: client, writers: writers,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
-                visited: &visitedThreads, destinations: destinations, authGuard: authGuard, count: count, log: log
+                visited: &visitedThreads, destinations: destinations, authGuard: authGuard, count: count, recordFile: recordFile, log: log
             )
         } else if let childId = child.folderId {
             await migrateFolder(
@@ -265,7 +267,7 @@ private func migrateFolder(
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
                 visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-                destinations: destinations, authGuard: authGuard, count: count, log: log
+                destinations: destinations, authGuard: authGuard, count: count, recordFile: recordFile, log: log
             )
         }
     }
@@ -285,6 +287,7 @@ private func migrateThread(
     destinations: DestinationConfig,
     authGuard: AuthGuard,
     count: (RunEvent) async -> Void,
+    recordFile: (String, String) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visited.contains(threadId), !Task.isCancelled, !authGuard.stopped else { return }
@@ -315,6 +318,7 @@ private func migrateThread(
 
     let shared = isShared(thread: thread, currentUserId: currentUserId)
     let noteTitle = shared ? title : "\(title) (Private)"
+    let dirDisplay = notesPath.count > 1 ? notesPath.dropFirst().joined(separator: " / ") : "Root folder"
 
     // Each thread resolves to exactly one concrete destination: either the setting for
     // its category (document vs. spreadsheet), or — in Ask mode — whatever the user picks.
@@ -370,6 +374,7 @@ private func migrateThread(
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
+        await recordFile(dirDisplay, noteTitle)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -419,6 +424,7 @@ private func migrateThread(
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
+        await recordFile(dirDisplay, noteTitle + ".md")
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -466,6 +472,7 @@ private func migrateThread(
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
+        await recordFile(dirDisplay, noteTitle + ".html")
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -517,6 +524,7 @@ private func migrateThread(
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
+        await recordFile(dirDisplay, noteTitle + ".numbers")
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -567,6 +575,9 @@ private func migrateThread(
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
+        for sheet in sheets {
+            await recordFile("\(dirDisplay)/\(noteTitle)", sheet.name + ".csv")
+        }
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)

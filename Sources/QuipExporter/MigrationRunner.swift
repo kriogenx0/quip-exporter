@@ -62,6 +62,7 @@ class MigrationRunner: ObservableObject {
     @Published var resultsKind: ResultsKind = .none
     @Published var authError: String?
     @Published var tokenTestResult: TokenTestResult?
+    @Published var copiedFiles: [CopiedFile] = []
 
     private var migrationTask: Task<Void, Never>?
 
@@ -87,6 +88,7 @@ class MigrationRunner: ObservableObject {
         runSummary = RunSummary()
         scanSummary = nil
         authError = nil
+        copiedFiles = []
         resultsKind = .export
 
         let blobCache = self.blobCache
@@ -117,6 +119,11 @@ class MigrationRunner: ObservableObject {
                     case .error: self.runSummary.errors += 1
                     }
                 }
+            }
+
+            func recordFile(_ directory: String, _ file: String) async {
+                guard let self else { return }
+                await MainActor.run { self.copiedFiles.append(CopiedFile(directory: directory, file: file)) }
             }
 
             let confirm: ((String, [String], Bool) async -> ExportDestination?)?
@@ -216,6 +223,7 @@ class MigrationRunner: ObservableObject {
                 confirmOverwrite: confirmOverwrite,
                 notifyAuthFailure: notifyAuthFailure,
                 count: count,
+                recordFile: recordFile,
                 log: log
             )
             guard let self else { return }
@@ -238,6 +246,7 @@ class MigrationRunner: ObservableObject {
         logEntries = []
         scanSummary = nil
         authError = nil
+        copiedFiles = []
         resultsKind = .scan
 
         migrationTask = Task.detached { [weak self] in

@@ -296,6 +296,7 @@ private func migrationDescription(
 // MARK: - Results (Summary / Logs)
 
 private enum ResultsTab: String, CaseIterable, Identifiable {
+    case files = "Files"
     case summary = "Summary"
     case logs = "Logs"
     var id: String { rawValue }
@@ -317,6 +318,8 @@ struct ResultsPanel: View {
             .padding(.top, 8)
 
             switch tab {
+            case .files:
+                FilesPanel(files: runner.copiedFiles)
             case .summary:
                 SummaryView(
                     resultsKind: runner.resultsKind,
@@ -396,6 +399,31 @@ struct SummaryView: View {
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Files
+
+struct FilesPanel: View {
+    let files: [CopiedFile]
+
+    var body: some View {
+        if files.isEmpty {
+            Text("No files copied yet.")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(files) { file in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(file.directory)
+                        .foregroundStyle(.secondary)
+                    Text(file.file)
+                        .padding(.leading, 16)
+                }
+            }
+            .listStyle(.inset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
