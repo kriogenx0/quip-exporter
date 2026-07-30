@@ -27,7 +27,7 @@ make_size icon_512x512.png      512
 make_size icon_512x512@2x.png   1024
 
 for png in "$ICONSET"/*.png; do
-    swift "$SCRIPT_DIR/hue_rotate.swift" "$png" "$png" 220
+    swift "$SCRIPT_DIR/compose_icon.swift" "$png" "$png"
 done
 
 iconutil --convert icns --output "$OUT" "$ICONSET"
