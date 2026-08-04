@@ -33,7 +33,7 @@ func run(
     blobCache: URL,
     confirm: ((String, [String], Bool) async -> ExportDestination?)? = nil,
     confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)? = nil,
-    notifyAuthFailure: (String) async -> Void = { _ in },
+    notifyFailure: (String) async -> Void = { _ in },
     count: (RunEvent) async -> Void = { _ in },
     recordFile: (String, String) async -> Void = { _, _ in },
     log: (String, LogEntry.Level) async -> Void
@@ -43,7 +43,7 @@ func run(
     let user: QuipCurrentUserResponse
     do { user = try await client.getCurrentUser() } catch {
         await log("Auth failed: \(error.localizedDescription)", .error)
-        if case MigrationError.notAuthorized = error { await notifyAuthFailure(error.localizedDescription) }
+        if case MigrationError.notAuthorized = error { await notifyFailure(error.localizedDescription) }
         return
     }
     await log("Authenticated as: \(user.name)", .info)
@@ -75,23 +75,27 @@ func run(
 
     var visitedFolders = Set<String>()
     var visitedThreads = Set<String>()
-    let authGuard = AuthGuard()
+    let runGuard = RunGuard()
 
     for fid in rootIds {
-        if Task.isCancelled || authGuard.stopped { break }
+        if Task.isCancelled || runGuard.stopped { break }
         await migrateFolder(
             folderId: fid, notesPath: ["From Quip"], mdPath: ["From Quip"],
             client: client, writers: writers,
             blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, trashFolderId: trashFolderId,
             visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-            destinations: destinations, authGuard: authGuard, count: count, recordFile: recordFile, log: log
+            destinations: destinations, runGuard: runGuard, count: count, recordFile: recordFile, log: log
         )
     }
 
-    if authGuard.stopped {
-        await log("Stopped: the Quip token was rejected (expired or revoked).", .error)
-        await notifyAuthFailure(authGuard.failureReason ?? "The Quip token was rejected.")
+    if runGuard.stopped {
+        if runGuard.isAuthFailure {
+            await log("Stopped: the Quip token was rejected (expired or revoked).", .error)
+        } else {
+            await log("Stopped: \(runGuard.failureReason ?? "an error occurred").", .error)
+        }
+        await notifyFailure(runGuard.failureReason ?? "The Quip token was rejected.")
     } else {
         await log("Done. Migrated \(visitedThreads.count) documents across \(visitedFolders.count) folders.", .info)
     }
@@ -106,7 +110,7 @@ func scan(
     deleteAfterCopy: Bool,
     notesAccount: String,
     exportFolder: URL?,
-    notifyAuthFailure: (String) async -> Void = { _ in },
+    notifyFailure: (String) async -> Void = { _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async -> ScanSummary? {
     await log("Scanning Quip account...", .info)
@@ -114,7 +118,7 @@ func scan(
     let user: QuipCurrentUserResponse
     do { user = try await client.getCurrentUser() } catch {
         await log("Auth failed: \(error.localizedDescription)", .error)
-        if case MigrationError.notAuthorized = error { await notifyAuthFailure(error.localizedDescription) }
+        if case MigrationError.notAuthorized = error { await notifyFailure(error.localizedDescription) }
         return nil
     }
     await log("Authenticated as: \(user.name)", .info)
@@ -147,21 +151,25 @@ func scan(
     var summary = ScanSummary()
     var visitedFolders = Set<String>()
     var visitedThreads = Set<String>()
-    let authGuard = AuthGuard()
+    let runGuard = RunGuard()
 
     for fid in rootIds {
-        if Task.isCancelled || authGuard.stopped { break }
+        if Task.isCancelled || runGuard.stopped { break }
         await scanFolder(
             folderId: fid, notesPath: ["From Quip"], mdPath: ["From Quip"],
             client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-            destinations: destinations, authGuard: authGuard, summary: &summary, log: log
+            destinations: destinations, runGuard: runGuard, summary: &summary, log: log
         )
     }
 
-    if authGuard.stopped {
-        await log("Scan stopped: the Quip token was rejected (expired or revoked).", .error)
-        await notifyAuthFailure(authGuard.failureReason ?? "The Quip token was rejected.")
+    if runGuard.stopped {
+        if runGuard.isAuthFailure {
+            await log("Scan stopped: the Quip token was rejected (expired or revoked).", .error)
+        } else {
+            await log("Scan stopped: \(runGuard.failureReason ?? "an error occurred").", .error)
+        }
+        await notifyFailure(runGuard.failureReason ?? "The Quip token was rejected.")
         return nil
     }
 
@@ -190,21 +198,19 @@ private func migrateFolder(
     visitedFolders: inout Set<String>,
     visitedThreads: inout Set<String>,
     destinations: DestinationConfig,
-    authGuard: AuthGuard,
+    runGuard: RunGuard,
     count: (RunEvent) async -> Void,
     recordFile: (String, String) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
-    guard !visitedFolders.contains(folderId), !Task.isCancelled, !authGuard.stopped else { return }
+    guard !visitedFolders.contains(folderId), !Task.isCancelled, !runGuard.stopped else { return }
     visitedFolders.insert(folderId)
 
     let data: QuipFolderResponse
     do { data = try await client.getFolder(folderId) } catch {
         await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error)
         await count(.error)
-        if case MigrationError.notAuthorized = error {
-            authGuard.stop(reason: error.localizedDescription)
-        }
+        runGuard.stop(reason: error.localizedDescription, isAuthFailure: isAuthError(error))
         return
     }
 
@@ -222,43 +228,53 @@ private func migrateFolder(
     if let nw = writers.notes {
         do { dirs.notesFolderId = try nw.getOrCreateFolder(path: nextNotesPath) } catch {
             await log("Failed to create Notes folder: \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
     }
     if let mw = writers.markdown {
         do { dirs.markdownDir = try mw.ensureFolder(path: nextMdPath) } catch {
             await log("Failed to create output folder: \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
     }
     if let hw = writers.html {
         do { dirs.htmlDir = try hw.ensureFolder(path: nextMdPath) } catch {
             await log("Failed to create output folder: \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
     }
     if let nuw = writers.numbers {
         do { dirs.numbersDir = try nuw.ensureFolder(path: nextMdPath) } catch {
             await log("Failed to create output folder: \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
     }
     if let cw = writers.csv {
         do { dirs.csvDir = try cw.ensureFolder(path: nextMdPath) } catch {
             await log("Failed to create output folder: \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
     }
 
     for child in data.children {
-        if Task.isCancelled || authGuard.stopped { break }
+        if Task.isCancelled || runGuard.stopped { break }
         if let threadId = child.threadId {
             await migrateThread(
                 threadId: threadId, notesPath: nextMdPath, dirs: dirs,
                 client: client, writers: writers,
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
-                visited: &visitedThreads, destinations: destinations, authGuard: authGuard, count: count, recordFile: recordFile, log: log
+                visited: &visitedThreads, destinations: destinations, runGuard: runGuard, count: count, recordFile: recordFile, log: log
             )
         } else if let childId = child.folderId {
             await migrateFolder(
@@ -267,7 +283,7 @@ private func migrateFolder(
                 blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, trashFolderId: trashFolderId,
                 visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-                destinations: destinations, authGuard: authGuard, count: count, recordFile: recordFile, log: log
+                destinations: destinations, runGuard: runGuard, count: count, recordFile: recordFile, log: log
             )
         }
     }
@@ -285,21 +301,19 @@ private func migrateThread(
     trashFolderId: String,
     visited: inout Set<String>,
     destinations: DestinationConfig,
-    authGuard: AuthGuard,
+    runGuard: RunGuard,
     count: (RunEvent) async -> Void,
     recordFile: (String, String) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
-    guard !visited.contains(threadId), !Task.isCancelled, !authGuard.stopped else { return }
+    guard !visited.contains(threadId), !Task.isCancelled, !runGuard.stopped else { return }
     visited.insert(threadId)
 
     let data: QuipThreadResponse
     do { data = try await client.getThread(threadId) } catch {
         await log("Failed to fetch thread \(threadId): \(error.localizedDescription)", .error)
         await count(.error)
-        if case MigrationError.notAuthorized = error {
-            authGuard.stop(reason: error.localizedDescription)
-        }
+        runGuard.stop(reason: error.localizedDescription, isAuthFailure: isAuthError(error))
         return
     }
 
@@ -361,7 +375,9 @@ private func migrateThread(
             }
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
 
         if !checklistItems.isEmpty {
@@ -419,7 +435,9 @@ private func migrateThread(
             try mw.writeContent(newContent, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
@@ -467,7 +485,9 @@ private func migrateThread(
             try hw.writeContent(newContent, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
@@ -499,7 +519,9 @@ private func migrateThread(
                                           createdStr: createdStr, folderPath: notesPath)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
         // No existingPreviewText for Numbers (reading a .numbers file back requires opening
         // it in Numbers) — the confirmation still shows a preview of what would be written.
@@ -519,7 +541,9 @@ private func migrateThread(
             try nuw.writeSheets(sheets, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
@@ -551,7 +575,9 @@ private func migrateThread(
                                         createdStr: createdStr, folderPath: notesPath)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
         let newContent = SpreadsheetHTMLParser.previewText(sheets: sheets)
         let oldContent = exists ? cw.existingPreviewText(title: noteTitle, dir: dir) : nil
@@ -570,7 +596,9 @@ private func migrateThread(
             try cw.writeSheets(sheets, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
-            await count(.error); return
+            await count(.error)
+            runGuard.stop(reason: error.localizedDescription)
+            return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
@@ -605,19 +633,17 @@ private func scanFolder(
     visitedFolders: inout Set<String>,
     visitedThreads: inout Set<String>,
     destinations: DestinationConfig,
-    authGuard: AuthGuard,
+    runGuard: RunGuard,
     summary: inout ScanSummary,
     log: (String, LogEntry.Level) async -> Void
 ) async {
-    guard !visitedFolders.contains(folderId), !Task.isCancelled, !authGuard.stopped else { return }
+    guard !visitedFolders.contains(folderId), !Task.isCancelled, !runGuard.stopped else { return }
     visitedFolders.insert(folderId)
 
     let data: QuipFolderResponse
     do { data = try await client.getFolder(folderId) } catch {
         await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error)
-        if case MigrationError.notAuthorized = error {
-            authGuard.stop(reason: error.localizedDescription)
-        }
+        runGuard.stop(reason: error.localizedDescription, isAuthFailure: isAuthError(error))
         return
     }
 
@@ -640,20 +666,20 @@ private func scanFolder(
     if let cw = writers.csv { dirs.csvDir = try? cw.ensureFolder(path: nextMdPath) }
 
     for child in data.children {
-        if Task.isCancelled || authGuard.stopped { break }
+        if Task.isCancelled || runGuard.stopped { break }
         if let threadId = child.threadId {
             await scanThread(
                 threadId: threadId, notesPath: nextMdPath, dirs: dirs,
                 client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, visited: &visitedThreads,
-                destinations: destinations, authGuard: authGuard, summary: &summary, log: log
+                destinations: destinations, runGuard: runGuard, summary: &summary, log: log
             )
         } else if let childId = child.folderId {
             await scanFolder(
                 folderId: childId, notesPath: nextNotesPath, mdPath: nextMdPath,
                 client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-                destinations: destinations, authGuard: authGuard, summary: &summary, log: log
+                destinations: destinations, runGuard: runGuard, summary: &summary, log: log
             )
         }
     }
@@ -669,19 +695,17 @@ private func scanThread(
     currentUserId: String,
     visited: inout Set<String>,
     destinations: DestinationConfig,
-    authGuard: AuthGuard,
+    runGuard: RunGuard,
     summary: inout ScanSummary,
     log: (String, LogEntry.Level) async -> Void
 ) async {
-    guard !visited.contains(threadId), !Task.isCancelled, !authGuard.stopped else { return }
+    guard !visited.contains(threadId), !Task.isCancelled, !runGuard.stopped else { return }
     visited.insert(threadId)
 
     let data: QuipThreadResponse
     do { data = try await client.getThread(threadId) } catch {
         await log("Failed to fetch thread \(threadId): \(error.localizedDescription)", .error)
-        if case MigrationError.notAuthorized = error {
-            authGuard.stop(reason: error.localizedDescription)
-        }
+        runGuard.stop(reason: error.localizedDescription, isAuthFailure: isAuthError(error))
         return
     }
 

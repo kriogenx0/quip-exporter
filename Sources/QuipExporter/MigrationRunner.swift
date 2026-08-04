@@ -101,7 +101,7 @@ class MigrationRunner: ObservableObject {
                 await MainActor.run { self.logEntries.append(entry) }
             }
 
-            func notifyAuthFailure(_ message: String) async {
+            func notifyFailure(_ message: String) async {
                 guard let self else { return }
                 await MainActor.run { self.authError = message }
             }
@@ -221,7 +221,7 @@ class MigrationRunner: ObservableObject {
                 blobCache: blobCache,
                 confirm: confirm,
                 confirmOverwrite: confirmOverwrite,
-                notifyAuthFailure: notifyAuthFailure,
+                notifyFailure: notifyFailure,
                 count: count,
                 recordFile: recordFile,
                 log: log
@@ -258,7 +258,7 @@ class MigrationRunner: ObservableObject {
                 await MainActor.run { self.logEntries.append(entry) }
             }
 
-            func notifyAuthFailure(_ message: String) async {
+            func notifyFailure(_ message: String) async {
                 guard let self else { return }
                 await MainActor.run { self.authError = message }
             }
@@ -270,7 +270,7 @@ class MigrationRunner: ObservableObject {
                 deleteAfterCopy: deleteAfterCopy,
                 notesAccount: notesAccount,
                 exportFolder: exportFolder,
-                notifyAuthFailure: notifyAuthFailure,
+                notifyFailure: notifyFailure,
                 log: log
             )
 
