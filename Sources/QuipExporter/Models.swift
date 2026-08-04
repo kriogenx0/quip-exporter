@@ -84,16 +84,20 @@ enum ResultsKind {
     case none, scan, export
 }
 
-// Stops a run/scan the moment Quip signals the token is rejected — either the token
-// itself is invalid, or a folder/thread comes back "Not authorized" — and prompts the user.
-final class AuthGuard {
+// Stops a run/scan the moment anything goes wrong — an auth rejection, a failed
+// fetch, a write failure — rather than limping on and reporting a pile of per-item
+// errors at the end. isAuthFailure distinguishes a rejected token (which prompts for
+// a new one) from any other error (which just needs to be surfaced and stop the run).
+final class RunGuard {
     private(set) var stopped = false
     private(set) var failureReason: String?
+    private(set) var isAuthFailure = false
 
-    func stop(reason: String) {
+    func stop(reason: String, isAuthFailure: Bool = false) {
         guard !stopped else { return }
         stopped = true
         failureReason = reason
+        self.isAuthFailure = isAuthFailure
     }
 }
 
@@ -183,6 +187,11 @@ enum MigrationError: Error, LocalizedError {
             return "Not authorized for \(path): \(body)"
         }
     }
+}
+
+func isAuthError(_ error: Error) -> Bool {
+    if case MigrationError.notAuthorized = error { return true }
+    return false
 }
 
 enum NotesError: Error, LocalizedError {
