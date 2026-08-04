@@ -30,7 +30,7 @@ make open
 
 Documents and spreadsheets each have their own destination setting, configured independently.
 
-**Apple Notes** — creates a top-level "From Quip" folder in Notes, preserving the Quip folder hierarchy. Available for documents and spreadsheets.
+**Apple Notes** — creates a top-level "Quip Export" folder in Notes, preserving the Quip folder hierarchy. Available for documents and spreadsheets.
 
 **Numbers** — saves each spreadsheet as a native `.numbers` file in a chosen output folder, one sheet per Quip tab. Spreadsheets only.
 

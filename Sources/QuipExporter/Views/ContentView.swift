@@ -12,7 +12,7 @@ struct ContentView: View {
 
     private static var defaultExportFolderPath: String {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("QuipDocuments").path
+            .appendingPathComponent("Quip Export").path
     }
 
     private var exportFolder: Binding<URL?> {
@@ -253,7 +253,7 @@ private func describe(_ destination: ExportDestination, category: String, notesA
     switch destination {
     case .appleNotes:
         let account = notesAccount.isEmpty ? "your default Notes account" : "the \"\(notesAccount)\" account"
-        return "\(category) are copied from your Quip account (Desktop, Starred, and Shared folders) into \(account) under a top-level \"From Quip\" folder, preserving the folder hierarchy. Desktop, Starred, and Private folders are flattened into the root."
+        return "\(category) are copied from your Quip account (Desktop, Starred, and Shared folders) into \(account) under a top-level \"Quip Export\" folder, preserving the folder hierarchy. Desktop, Starred, and Private folders are flattened into the root."
     case .numbers:
         let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
         return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as native Numbers documents inside \(folder), preserving the folder hierarchy."

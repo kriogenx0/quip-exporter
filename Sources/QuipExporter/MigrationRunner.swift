@@ -320,7 +320,7 @@ class MigrationRunner: ObservableObject {
 
             let writer = NotesWriter(account: notesAccount)
             do {
-                let folderId = try writer.getOrCreateFolder(path: ["From Quip"])
+                let folderId = try writer.getOrCreateFolder(path: ["Quip Export"])
                 await log("Creating test note…", .info)
                 let (sent, received) = try writer.runFormattingTest(folderId: folderId)
                 await log("── SENT HTML ──────────────────────────────────", .info)

@@ -54,18 +54,24 @@ actor QuipClient {
     private func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
         var attempt = 0
         while true {
-            let (data, resp) = try await session.data(for: req)
-            guard let http = resp as? HTTPURLResponse else {
-                throw MigrationError.api(statusCode: -1, path: req.url?.path ?? "", body: "")
-            }
-            let isRateLimited = http.statusCode == 429
-                || (http.statusCode == 503 && String(data: data, encoding: .utf8)?.contains("Rate Limit") == true)
-            if isRateLimited, attempt < maxRetries {
-                try await Task.sleep(for: .seconds(retryDelay(after: http, attempt: attempt)))
+            do {
+                let (data, resp) = try await session.data(for: req)
+                guard let http = resp as? HTTPURLResponse else {
+                    throw MigrationError.api(statusCode: -1, path: req.url?.path ?? "", body: "")
+                }
+                let isRateLimited = http.statusCode == 429
+                    || (http.statusCode == 503 && String(data: data, encoding: .utf8)?.contains("Rate Limit") == true)
+                if isRateLimited, attempt < maxRetries {
+                    try await Task.sleep(for: .seconds(retryDelay(after: http, attempt: attempt)))
+                    attempt += 1
+                    continue
+                }
+                return (data, http)
+            } catch let error as URLError where isTransient(error) && attempt < maxRetries {
+                try await Task.sleep(for: .seconds(min(pow(2, Double(attempt)), 30)))
                 attempt += 1
                 continue
             }
-            return (data, http)
         }
     }
 
@@ -74,6 +80,20 @@ actor QuipClient {
             return seconds
         }
         return min(pow(2, Double(attempt)), 30)
+    }
+
+    // Dropped wifi, sleep/wake, and VPN blips surface as one of these — worth a backoff
+    // retry rather than failing the whole item. .cancelled is deliberately excluded so
+    // the user's Stop button takes effect immediately.
+    private func isTransient(_ error: URLError) -> Bool {
+        switch error.code {
+        case .networkConnectionLost, .timedOut, .notConnectedToInternet,
+             .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+             .resourceUnavailable, .secureConnectionFailed, .dataNotAllowed:
+            return true
+        default:
+            return false
+        }
     }
 
     // GET responses (folders/threads/current user) are cached to disk for up to a day —

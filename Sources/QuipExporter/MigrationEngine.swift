@@ -68,7 +68,7 @@ func run(
                                           confirm: confirm, confirmOverwrite: confirmOverwrite)
 
     if let nw = writers.notes {
-        do { _ = try nw.getOrCreateFolder(path: ["From Quip"]) } catch {
+        do { _ = try nw.getOrCreateFolder(path: ["Quip Export"]) } catch {
             await log("Failed to create root Notes folder: \(error.localizedDescription)", .error); return
         }
     }
@@ -80,7 +80,7 @@ func run(
     for fid in rootIds {
         if Task.isCancelled || runGuard.stopped { break }
         await migrateFolder(
-            folderId: fid, notesPath: ["From Quip"], mdPath: ["From Quip"],
+            folderId: fid, notesPath: ["Quip Export"], mdPath: ["Quip Export"],
             client: client, writers: writers,
             blobCache: blobCache, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, trashFolderId: trashFolderId,
@@ -156,7 +156,7 @@ func scan(
     for fid in rootIds {
         if Task.isCancelled || runGuard.stopped { break }
         await scanFolder(
-            folderId: fid, notesPath: ["From Quip"], mdPath: ["From Quip"],
+            folderId: fid, notesPath: ["Quip Export"], mdPath: ["Quip Export"],
             client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
             destinations: destinations, runGuard: runGuard, summary: &summary, log: log
@@ -175,6 +175,31 @@ func scan(
 
     await log("Scan complete. \(summary.toTransfer) to transfer, \(summary.toUpdate) to update, \(summary.toTrash) to delete (trash in Quip) after copying.", .info)
     return summary
+}
+
+// Fetches a folder level's children ahead of the sequential loop below. QuipClient is
+// an actor whose per-request rate-limit delay is a Task.sleep inside get() — since
+// actors are reentrant across suspension points, concurrent prefetch calls overlap
+// their delays instead of paying rateDelay once per item serially, and populate the
+// on-disk cache so the sequential loop just reads it back. Results/errors are
+// discarded here; the real fetch (and any error handling) happens in that loop.
+private func prefetchChildren(_ children: [QuipFolderChild], client: QuipClient) async {
+    let maxConcurrency = 8
+    await withTaskGroup(of: Void.self) { group in
+        var iterator = children.makeIterator()
+        func addNext() {
+            guard !Task.isCancelled, let child = iterator.next() else { return }
+            group.addTask {
+                if let tid = child.threadId {
+                    _ = try? await client.getThread(tid)
+                } else if let fid = child.folderId {
+                    _ = try? await client.getFolder(fid)
+                }
+            }
+        }
+        for _ in 0..<maxConcurrency { addNext() }
+        while await group.next() != nil { addNext() }
+    }
 }
 
 // MARK: - Folder & thread traversal
@@ -265,6 +290,8 @@ private func migrateFolder(
             return
         }
     }
+
+    await prefetchChildren(data.children, client: client)
 
     for child in data.children {
         if Task.isCancelled || runGuard.stopped { break }
@@ -664,6 +691,8 @@ private func scanFolder(
     if let hw = writers.html { dirs.htmlDir = try? hw.ensureFolder(path: nextMdPath) }
     if let nuw = writers.numbers { dirs.numbersDir = try? nuw.ensureFolder(path: nextMdPath) }
     if let cw = writers.csv { dirs.csvDir = try? cw.ensureFolder(path: nextMdPath) }
+
+    await prefetchChildren(data.children, client: client)
 
     for child in data.children {
         if Task.isCancelled || runGuard.stopped { break }

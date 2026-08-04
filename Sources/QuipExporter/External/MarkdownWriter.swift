@@ -4,7 +4,7 @@ struct MarkdownWriter {
     let outputDir: URL
 
     func ensureFolder(path: [String]) throws -> URL {
-        // Drop the first component ("From Quip") — that's the root output dir
+        // Drop the first component ("Quip Export") — that's the root output dir
         let dir = path.dropFirst().reduce(outputDir) { $0.appendingPathComponent(sanitize($1)) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
