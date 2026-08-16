@@ -403,7 +403,6 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
-            runGuard.stop(reason: error.localizedDescription)
             return
         }
 
@@ -463,7 +462,6 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
-            runGuard.stop(reason: error.localizedDescription)
             return
         }
 
@@ -513,7 +511,6 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
-            runGuard.stop(reason: error.localizedDescription)
             return
         }
 
@@ -547,7 +544,6 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
-            runGuard.stop(reason: error.localizedDescription)
             return
         }
         // No existingPreviewText for Numbers (reading a .numbers file back requires opening
@@ -569,7 +565,6 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
-            runGuard.stop(reason: error.localizedDescription)
             return
         }
 
@@ -603,7 +598,6 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
-            runGuard.stop(reason: error.localizedDescription)
             return
         }
         let newContent = SpreadsheetHTMLParser.previewText(sheets: sheets)
@@ -624,7 +618,6 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
-            runGuard.stop(reason: error.localizedDescription)
             return
         }
 
