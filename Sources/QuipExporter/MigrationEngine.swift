@@ -35,7 +35,7 @@ func run(
     confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)? = nil,
     notifyFailure: (String) async -> Void = { _ in },
     count: (RunEvent) async -> Void = { _ in },
-    recordFile: (String, String) async -> Void = { _, _ in },
+    recordFile: (String, String, FileStatus) async -> Void = { _, _, _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async {
     await log("Fetching current user...", .info)
@@ -111,6 +111,7 @@ func scan(
     notesAccount: String,
     exportFolder: URL?,
     notifyFailure: (String) async -> Void = { _ in },
+    recordFile: (String, String, FileStatus) async -> Void = { _, _, _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async -> ScanSummary? {
     await log("Scanning Quip account...", .info)
@@ -159,7 +160,7 @@ func scan(
             folderId: fid, notesPath: ["Quip Export"], mdPath: ["Quip Export"],
             client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-            destinations: destinations, runGuard: runGuard, summary: &summary, log: log
+            destinations: destinations, runGuard: runGuard, summary: &summary, recordFile: recordFile, log: log
         )
     }
 
@@ -225,7 +226,7 @@ private func migrateFolder(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     count: (RunEvent) async -> Void,
-    recordFile: (String, String) async -> Void,
+    recordFile: (String, String, FileStatus) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visitedFolders.contains(folderId), !Task.isCancelled, !runGuard.stopped else { return }
@@ -330,7 +331,7 @@ private func migrateThread(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     count: (RunEvent) async -> Void,
-    recordFile: (String, String) async -> Void,
+    recordFile: (String, String, FileStatus) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visited.contains(threadId), !Task.isCancelled, !runGuard.stopped else { return }
@@ -389,8 +390,12 @@ private func migrateThread(
             switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                           oldContent: oldBody, newContent: fullHtml,
                                           confirmOverwrite: destinations.confirmOverwrite) {
-            case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
-            case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
+            case .unchanged:
+                await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
+                await recordFile(dirDisplay, noteTitle, .skipped); return
+            case .skip:
+                await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
+                await recordFile(dirDisplay, noteTitle, .skipped); return
             case .stop: return
             case .proceed(let update):
                 wasUpdate = update
@@ -403,6 +408,7 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle, .error)
             return
         }
 
@@ -416,7 +422,7 @@ private func migrateThread(
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
-        await recordFile(dirDisplay, noteTitle)
+        await recordFile(dirDisplay, noteTitle, .copied)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -451,8 +457,12 @@ private func migrateThread(
         switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                       oldContent: oldContent, newContent: newContent,
                                       confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
+        case .unchanged:
+            await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
+            await recordFile(dirDisplay, noteTitle + ".md", .skipped); return
+        case .skip:
+            await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
+            await recordFile(dirDisplay, noteTitle + ".md", .skipped); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
@@ -462,12 +472,13 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle + ".md", .error)
             return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
-        await recordFile(dirDisplay, noteTitle + ".md")
+        await recordFile(dirDisplay, noteTitle + ".md", .copied)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -500,8 +511,12 @@ private func migrateThread(
         switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                       oldContent: oldContent, newContent: newContent,
                                       confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
+        case .unchanged:
+            await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
+            await recordFile(dirDisplay, noteTitle + ".html", .skipped); return
+        case .skip:
+            await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
+            await recordFile(dirDisplay, noteTitle + ".html", .skipped); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
@@ -511,12 +526,13 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle + ".html", .error)
             return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
-        await recordFile(dirDisplay, noteTitle + ".html")
+        await recordFile(dirDisplay, noteTitle + ".html", .copied)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -544,6 +560,7 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle + ".numbers", .error)
             return
         }
         // No existingPreviewText for Numbers (reading a .numbers file back requires opening
@@ -554,8 +571,12 @@ private func migrateThread(
         switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                       oldContent: nil, newContent: newContent,
                                       confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
+        case .unchanged:
+            await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
+            await recordFile(dirDisplay, noteTitle + ".numbers", .skipped); return
+        case .skip:
+            await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
+            await recordFile(dirDisplay, noteTitle + ".numbers", .skipped); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
@@ -565,12 +586,13 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle + ".numbers", .error)
             return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
-        await recordFile(dirDisplay, noteTitle + ".numbers")
+        await recordFile(dirDisplay, noteTitle + ".numbers", .copied)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -598,6 +620,7 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle + ".csv", .error)
             return
         }
         let newContent = SpreadsheetHTMLParser.previewText(sheets: sheets)
@@ -607,8 +630,12 @@ private func migrateThread(
         switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
                                       oldContent: oldContent, newContent: newContent,
                                       confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged: await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged); return
-        case .skip: await log("  [skipped]  \(noteTitle)", .info); await count(.skipped); return
+        case .unchanged:
+            await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
+            await recordFile(dirDisplay, noteTitle + ".csv", .skipped); return
+        case .skip:
+            await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
+            await recordFile(dirDisplay, noteTitle + ".csv", .skipped); return
         case .stop: return
         case .proceed(let update): wasUpdate = update
         }
@@ -618,13 +645,14 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle + ".csv", .error)
             return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
         for sheet in sheets {
-            await recordFile("\(dirDisplay)/\(noteTitle)", sheet.name + ".csv")
+            await recordFile("\(dirDisplay)/\(noteTitle)", sheet.name + ".csv", .copied)
         }
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
@@ -655,6 +683,7 @@ private func scanFolder(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     summary: inout ScanSummary,
+    recordFile: (String, String, FileStatus) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visitedFolders.contains(folderId), !Task.isCancelled, !runGuard.stopped else { return }
@@ -694,14 +723,14 @@ private func scanFolder(
                 threadId: threadId, notesPath: nextMdPath, dirs: dirs,
                 client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, visited: &visitedThreads,
-                destinations: destinations, runGuard: runGuard, summary: &summary, log: log
+                destinations: destinations, runGuard: runGuard, summary: &summary, recordFile: recordFile, log: log
             )
         } else if let childId = child.folderId {
             await scanFolder(
                 folderId: childId, notesPath: nextNotesPath, mdPath: nextMdPath,
                 client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-                destinations: destinations, runGuard: runGuard, summary: &summary, log: log
+                destinations: destinations, runGuard: runGuard, summary: &summary, recordFile: recordFile, log: log
             )
         }
     }
@@ -719,6 +748,7 @@ private func scanThread(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     summary: inout ScanSummary,
+    recordFile: (String, String, FileStatus) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visited.contains(threadId), !Task.isCancelled, !runGuard.stopped else { return }
@@ -744,12 +774,19 @@ private func scanThread(
     let shared = isShared(thread: thread, currentUserId: currentUserId)
     let noteTitle = shared ? title : "\(title) (Private)"
     let categoryDestination = thread.isSpreadsheet ? destinations.spreadsheet : destinations.document
+    let dirDisplay = notesPath.count > 1 ? notesPath.dropFirst().joined(separator: " / ") : "Root folder"
 
     let (handled, exists) = scanExistence(
         categoryDestination: categoryDestination, isSpreadsheet: thread.isSpreadsheet,
         noteTitle: noteTitle, createdStr: createdStr, dirs: dirs, writers: writers
     )
     guard handled else { return }
+
+    // Nothing is actually written during a scan — a document not yet present is shown as
+    // "would transfer" (the same green check a real copy gets) and one that already
+    // exists is shown as "would update/skip" depending on the run's overwrite setting.
+    let fileName = noteTitle + fileExtension(for: categoryDestination)
+    await recordFile(dirDisplay, fileName, exists ? .skipped : .copied)
 
     if exists {
         summary.toUpdate += 1
@@ -758,6 +795,16 @@ private func scanThread(
     }
     if deleteAfterCopy && !shared {
         summary.toTrash += 1
+    }
+}
+
+private func fileExtension(for destination: ExportDestination) -> String {
+    switch destination {
+    case .appleNotes, .ask: return ""
+    case .markdown: return ".md"
+    case .html: return ".html"
+    case .numbers: return ".numbers"
+    case .csv: return ".csv"
     }
 }
 

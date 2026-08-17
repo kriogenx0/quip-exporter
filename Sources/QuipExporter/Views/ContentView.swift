@@ -77,8 +77,8 @@ struct SettingsPanel: View {
     let isRunning: Bool
     let tokenTestResult: TokenTestResult?
     let onTestToken: () -> Void
-    @State private var showToken = false
     @State private var showDescription = true
+    @State private var showPasteTokenSheet = false
 
     private var needsExportFolder: Bool {
         documentDestination != .appleNotes || spreadsheetDestination != .appleNotes
@@ -99,36 +99,8 @@ struct SettingsPanel: View {
                     .fixedSize()
                     Button("Get Token") {
                         NSWorkspace.shared.open(quipDomain.tokenURL)
+                        showPasteTokenSheet = true
                     }
-                }
-
-                HStack {
-                    TokenField(text: $quipToken, isSecure: !showToken)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: 22)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.secondary.opacity(0.2), lineWidth: 0.5)
-                        )
-
-                    Button {
-                        if let pasted = NSPasteboard.general.string(forType: .string) {
-                            quipToken = pasted
-                        }
-                    } label: {
-                        Image(systemName: "doc.on.clipboard")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button { showToken.toggle() } label: {
-                        Image(systemName: showToken ? "eye.slash" : "eye")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-
                     Button("Test Token") { onTestToken() }
                 }
 
@@ -221,6 +193,44 @@ struct SettingsPanel: View {
         .onChange(of: isRunning) { newValue in
             if newValue { showDescription = false }
         }
+        .sheet(isPresented: $showPasteTokenSheet) {
+            PasteTokenSheet(
+                onPaste: {
+                    showPasteTokenSheet = false
+                    if let pasted = NSPasteboard.general.string(forType: .string) {
+                        quipToken = pasted
+                        onTestToken()
+                    }
+                },
+                onCancel: { showPasteTokenSheet = false }
+            )
+        }
+    }
+}
+
+// MARK: - Paste Token Sheet
+
+private struct PasteTokenSheet: View {
+    let onPaste: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Paste Your Token")
+                .font(.headline)
+            Text("Copy the token from the page that just opened in your browser, then paste it in below.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { onCancel() }
+                Button("Paste Token") { onPaste() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
     }
 }
 
@@ -432,22 +442,48 @@ struct SummaryView: View {
 struct FilesPanel: View {
     let files: [CopiedFile]
 
+    private var groups: [(directory: String, files: [CopiedFile])] {
+        var order: [String] = []
+        var byDirectory: [String: [CopiedFile]] = [:]
+        for file in files {
+            if byDirectory[file.directory] == nil { order.append(file.directory) }
+            byDirectory[file.directory, default: []].append(file)
+        }
+        return order.map { ($0, byDirectory[$0] ?? []) }
+    }
+
     var body: some View {
         if files.isEmpty {
             Text("No files copied yet.")
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List(files) { file in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(file.directory)
-                        .foregroundStyle(.secondary)
-                    Text(file.file)
-                        .padding(.leading, 16)
+            List {
+                ForEach(groups, id: \.directory) { group in
+                    Section(group.directory) {
+                        ForEach(group.files) { file in
+                            HStack {
+                                statusIcon(file.status)
+                                Text(file.file)
+                            }
+                        }
+                    }
                 }
             }
             .listStyle(.inset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func statusIcon(_ status: FileStatus) -> some View {
+        switch status {
+        case .copied:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .skipped:
+            Image(systemName: "arrow.right.circle").foregroundStyle(.secondary)
+        case .error:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
         }
     }
 }

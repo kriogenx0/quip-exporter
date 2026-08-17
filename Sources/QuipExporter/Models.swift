@@ -47,12 +47,18 @@ struct TokenTestResult {
     let message: String
 }
 
-// A single file (or Apple Notes note) written during a real export run, for display in
+// Outcome of a single file/note write attempt, for display in the Files tab.
+enum FileStatus: Equatable {
+    case copied, skipped, error
+}
+
+// A single file (or Apple Notes note) touched during a real export run, for display in
 // the Files tab.
 struct CopiedFile: Identifiable, Equatable {
     let id = UUID()
     let directory: String
     let file: String
+    let status: FileStatus
 }
 
 // Tallies produced by a read-only scan of the Quip account, without writing anything.

@@ -121,9 +121,9 @@ class MigrationRunner: ObservableObject {
                 }
             }
 
-            func recordFile(_ directory: String, _ file: String) async {
+            func recordFile(_ directory: String, _ file: String, _ status: FileStatus) async {
                 guard let self else { return }
-                await MainActor.run { self.copiedFiles.append(CopiedFile(directory: directory, file: file)) }
+                await MainActor.run { self.copiedFiles.append(CopiedFile(directory: directory, file: file, status: status)) }
             }
 
             let confirm: ((String, [String], Bool) async -> ExportDestination?)?
@@ -263,6 +263,11 @@ class MigrationRunner: ObservableObject {
                 await MainActor.run { self.authError = message }
             }
 
+            func recordFile(_ directory: String, _ file: String, _ status: FileStatus) async {
+                guard let self else { return }
+                await MainActor.run { self.copiedFiles.append(CopiedFile(directory: directory, file: file, status: status)) }
+            }
+
             let summary = await scan(
                 client: client,
                 documentDestination: documentDestination,
@@ -271,6 +276,7 @@ class MigrationRunner: ObservableObject {
                 notesAccount: notesAccount,
                 exportFolder: exportFolder,
                 notifyFailure: notifyFailure,
+                recordFile: recordFile,
                 log: log
             )
 
