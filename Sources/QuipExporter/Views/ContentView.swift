@@ -442,14 +442,26 @@ struct SummaryView: View {
 struct FilesPanel: View {
     let files: [CopiedFile]
 
-    private var groups: [(directory: String, files: [CopiedFile])] {
-        var order: [String] = []
-        var byDirectory: [String: [CopiedFile]] = [:]
+    private struct Group: Identifiable {
+        let id = UUID()
+        let directory: String
+        var files: [CopiedFile]
+    }
+
+    // Splits into runs of consecutive files sharing a directory, rather than merging
+    // every occurrence of a directory name — so a directory revisited later in the
+    // (unsorted, traversal-order) list gets its own header instead of merging back
+    // into an earlier, non-adjacent run.
+    private var groups: [Group] {
+        var result: [Group] = []
         for file in files {
-            if byDirectory[file.directory] == nil { order.append(file.directory) }
-            byDirectory[file.directory, default: []].append(file)
+            if result.indices.last.map({ result[$0].directory == file.directory }) == true {
+                result[result.count - 1].files.append(file)
+            } else {
+                result.append(Group(directory: file.directory, files: [file]))
+            }
         }
-        return order.map { ($0, byDirectory[$0] ?? []) }
+        return result
     }
 
     var body: some View {
@@ -458,19 +470,31 @@ struct FilesPanel: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List {
-                ForEach(groups, id: \.directory) { group in
-                    Section(group.directory) {
-                        ForEach(group.files) { file in
-                            HStack {
-                                statusIcon(file.status)
-                                Text(file.file)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    ForEach(groups) { group in
+                        Section {
+                            ForEach(group.files) { file in
+                                HStack {
+                                    statusIcon(file.status)
+                                    Text(file.file)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                        } header: {
+                            Text(group.directory)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(.bar)
                         }
                     }
                 }
             }
-            .listStyle(.inset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -525,7 +549,7 @@ struct ControlBar: View {
         ZStack {
             // Status anchored to the leading edge
             HStack {
-                Text(runner.logEntries.isEmpty ? " " : "\(runner.logEntries.count) log entries")
+                Text(runner.copiedFiles.isEmpty ? " " : "\(runner.copiedFiles.count) total files")
                     .foregroundStyle(.secondary)
                 Spacer()
                 if !runner.isRunning && !runner.logEntries.isEmpty {
