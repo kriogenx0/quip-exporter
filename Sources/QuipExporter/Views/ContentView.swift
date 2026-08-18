@@ -23,31 +23,37 @@ struct ContentView: View {
     }
 
     @StateObject private var runner = MigrationRunner()
+    @State private var logsExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
-            SettingsPanel(
-                quipToken: $quipToken,
-                quipDomain: $quipDomain,
-                documentDestination: $documentDestination,
-                spreadsheetDestination: $spreadsheetDestination,
-                deleteAfterCopy: $deleteAfterCopy,
-                existingFileBehavior: $existingFileBehavior,
-                notesAccount: $notesAccount,
-                exportFolder: exportFolder,
-                isRunning: runner.isRunning,
-                tokenTestResult: runner.tokenTestResult,
-                onTestToken: { runner.testToken(token: quipToken, domain: quipDomain) }
-            )
-            .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 0) {
+                ScrollView {
+                    SettingsPanel(
+                        quipToken: $quipToken,
+                        quipDomain: $quipDomain,
+                        documentDestination: $documentDestination,
+                        spreadsheetDestination: $spreadsheetDestination,
+                        deleteAfterCopy: $deleteAfterCopy,
+                        existingFileBehavior: $existingFileBehavior,
+                        notesAccount: $notesAccount,
+                        exportFolder: exportFolder,
+                        isRunning: runner.isRunning,
+                        tokenTestResult: runner.tokenTestResult,
+                        onTestToken: { runner.testToken(token: quipToken, domain: quipDomain) }
+                    )
+                }
+                .frame(width: 320)
+
+                Divider()
+
+                ResultsPanel(runner: runner, quipDomain: quipDomain)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
 
             Divider()
 
-            ResultsPanel(runner: runner, quipDomain: quipDomain)
-
-            Divider()
-
-            ControlBar(
+            BottomBar(
                 runner: runner,
                 quipToken: quipToken,
                 quipDomain: quipDomain,
@@ -56,10 +62,11 @@ struct ContentView: View {
                 deleteAfterCopy: deleteAfterCopy,
                 existingFileBehavior: existingFileBehavior,
                 notesAccount: notesAccount,
-                exportFolder: exportFolder.wrappedValue
+                exportFolder: exportFolder.wrappedValue,
+                logsExpanded: $logsExpanded
             )
         }
-        .frame(minWidth: 650, minHeight: 550)
+        .frame(minWidth: 850, minHeight: 600)
     }
 }
 
@@ -87,21 +94,21 @@ struct SettingsPanel: View {
     var body: some View {
         Form {
             Section {
-                HStack {
-                    Text("Token")
-                    Spacer()
-                    Picker("", selection: $quipDomain) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Token", selection: $quipDomain) {
                         ForEach(QuipDomain.allCases) { d in
                             Text(d.rawValue).tag(d)
                         }
                     }
                     .pickerStyle(.menu)
-                    .fixedSize()
-                    Button("Get Token") {
-                        NSWorkspace.shared.open(quipDomain.tokenURL)
-                        showPasteTokenSheet = true
+
+                    HStack {
+                        Button("Get Token") {
+                            NSWorkspace.shared.open(quipDomain.tokenURL)
+                            showPasteTokenSheet = true
+                        }
+                        Button("Test Token") { onTestToken() }
                     }
-                    Button("Test Token") { onTestToken() }
                 }
 
                 if let tokenTestResult {
@@ -113,45 +120,30 @@ struct SettingsPanel: View {
             .disabled(isRunning)
 
             Section {
-                HStack {
-                    Text("Documents")
-                    Spacer()
-                    Picker("", selection: $documentDestination) {
-                        ForEach(ExportDestination.allCases.filter { $0 != .numbers && $0 != .csv }) { d in
-                            Text(d.rawValue).tag(d)
-                        }
+                Picker("Documents", selection: $documentDestination) {
+                    ForEach(ExportDestination.allCases.filter { $0 != .numbers && $0 != .csv }) { d in
+                        Text(d.rawValue).tag(d)
                     }
-                    .pickerStyle(.menu)
-                    .fixedSize()
                 }
+                .pickerStyle(.menu)
 
-                HStack {
-                    Text("Spreadsheets")
-                    Spacer()
-                    Picker("", selection: $spreadsheetDestination) {
-                        ForEach(ExportDestination.allCases) { d in
-                            Text(d.rawValue).tag(d)
-                        }
+                Picker("Spreadsheets", selection: $spreadsheetDestination) {
+                    ForEach(ExportDestination.allCases) { d in
+                        Text(d.rawValue).tag(d)
                     }
-                    .pickerStyle(.menu)
-                    .fixedSize()
                 }
+                .pickerStyle(.menu)
 
                 if needsExportFolder {
                     FolderPickerRow(label: "Export Folder", url: $exportFolder)
                 }
 
-                HStack {
-                    Text("If file already exists")
-                    Spacer()
-                    Picker("", selection: $existingFileBehavior) {
-                        ForEach(ExistingFileBehavior.allCases) { b in
-                            Text(b.rawValue).tag(b)
-                        }
+                Picker("If file already exists", selection: $existingFileBehavior) {
+                    ForEach(ExistingFileBehavior.allCases) { b in
+                        Text(b.rawValue).tag(b)
                     }
-                    .pickerStyle(.menu)
-                    .fixedSize()
                 }
+                .pickerStyle(.menu)
 
                 Toggle("Delete private Quip documents after copying", isOn: $deleteAfterCopy)
             }
@@ -239,12 +231,14 @@ private struct FolderPickerRow: View {
     @Binding var url: URL?
 
     var body: some View {
-        LabeledContent(label) {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
             HStack {
                 Text(url?.path ?? "Not configured")
                     .foregroundStyle(url == nil ? .secondary : .primary)
                     .truncationMode(.middle)
                     .lineLimit(1)
+                Spacer()
                 Button(url == nil ? "Configure…" : "Change…") {
                     let panel = NSOpenPanel()
                     panel.canChooseFiles = false
@@ -320,19 +314,15 @@ private func migrationDescription(
     return parts.joined(separator: " ")
 }
 
-// MARK: - Results (Summary / Logs)
-
-private enum ResultsTab: String, CaseIterable, Identifiable {
-    case files = "Files"
-    case summary = "Summary"
-    case logs = "Logs"
-    var id: String { rawValue }
-}
+// MARK: - Results (Summary above Files)
 
 struct ResultsPanel: View {
     @ObservedObject var runner: MigrationRunner
     let quipDomain: QuipDomain
-    @State private var tab: ResultsTab = .files
+
+    private var hasSummary: Bool {
+        runner.resultsKind != .none || runner.authError != nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -344,18 +334,7 @@ struct ResultsPanel: View {
                 .padding(.top, 8)
             }
 
-            Picker("", selection: $tab) {
-                ForEach(ResultsTab.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 200)
-            .padding(.top, 8)
-
-            switch tab {
-            case .files:
-                FilesPanel(files: runner.copiedFiles)
-            case .summary:
+            if hasSummary {
                 SummaryView(
                     resultsKind: runner.resultsKind,
                     summary: runner.runSummary,
@@ -363,15 +342,12 @@ struct ResultsPanel: View {
                     authError: runner.authError,
                     quipDomain: quipDomain
                 )
-            case .logs:
-                LogPanel(entries: runner.logEntries)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
             }
-        }
-        .onChange(of: runner.scanSummary) { newValue in
-            if newValue != nil { tab = .summary }
-        }
-        .onChange(of: runner.authError) { newValue in
-            if newValue != nil { tab = .summary }
+
+            FilesPanel(files: runner.copiedFiles)
         }
     }
 }
@@ -433,7 +409,7 @@ struct SummaryView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -523,9 +499,9 @@ struct LogPanel: View {
     }
 }
 
-// MARK: - Control bar
+// MARK: - Bottom bar (status, actions, and collapsible logs)
 
-struct ControlBar: View {
+struct BottomBar: View {
     @ObservedObject var runner: MigrationRunner
     let quipToken: String
     let quipDomain: QuipDomain
@@ -535,6 +511,7 @@ struct ControlBar: View {
     let existingFileBehavior: ExistingFileBehavior
     let notesAccount: String
     let exportFolder: URL?
+    @Binding var logsExpanded: Bool
 
     private var canStart: Bool {
         guard !quipToken.isEmpty else { return false }
@@ -546,32 +523,71 @@ struct ControlBar: View {
     }
 
     var body: some View {
-        ZStack {
-            // Status anchored to the leading edge
-            HStack {
-                Text(runner.copiedFiles.isEmpty ? " " : "\(runner.copiedFiles.count) total files")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if !runner.isRunning && !runner.logEntries.isEmpty {
-                    Button("Save Log") { saveLog() }
-                    Button("Clear Log") { runner.logEntries = [] }
-                }
-                if !runner.isRunning && (documentDestination == .appleNotes || spreadsheetDestination == .appleNotes) {
-                    Button("Create Test Note") {
-                        runner.runFormattingTest(notesAccount: notesAccount)
-                    }
-                }
+        VStack(spacing: 0) {
+            if logsExpanded {
+                LogPanel(entries: runner.logEntries)
+                    .frame(height: 220)
+                Divider()
             }
 
-            // Buttons centered independently
-            if runner.isRunning {
-                Button("Stop", role: .destructive) { runner.stop() }
-                    .keyboardShortcut(.escape, modifiers: [])
-            } else {
+            ZStack {
+                // Status anchored to the leading edge
                 HStack {
-                    if !quipToken.isEmpty {
-                        Button("Scan") {
-                            runner.scanAccount(
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { logsExpanded.toggle() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.up")
+                                .rotationEffect(.degrees(logsExpanded ? 180 : 0))
+                            Text(runner.logEntries.isEmpty ? "Logs" : "Logs (\(runner.logEntries.count))")
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+
+                    if logsExpanded && !runner.logEntries.isEmpty {
+                        Button("Save…") { saveLog() }
+                        Button("Clear") { runner.logEntries = [] }
+                    }
+
+                    Spacer()
+
+                    Text(runner.copiedFiles.isEmpty ? " " : "\(runner.copiedFiles.count) total files")
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    #if DEBUG
+                    if !runner.isRunning && (documentDestination == .appleNotes || spreadsheetDestination == .appleNotes) {
+                        Button("Create Test Note") {
+                            runner.runFormattingTest(notesAccount: notesAccount)
+                        }
+                    }
+                    #endif
+                }
+
+                // Buttons centered independently
+                if runner.isRunning {
+                    Button("Stop", role: .destructive) { runner.stop() }
+                        .keyboardShortcut(.escape, modifiers: [])
+                } else {
+                    HStack {
+                        if !quipToken.isEmpty {
+                            Button("Scan") {
+                                runner.scanAccount(
+                                    token: quipToken,
+                                    domain: quipDomain,
+                                    documentDestination: documentDestination,
+                                    spreadsheetDestination: spreadsheetDestination,
+                                    deleteAfterCopy: deleteAfterCopy,
+                                    rateDelay: 0.5,
+                                    notesAccount: notesAccount,
+                                    exportFolder: exportFolder
+                                )
+                            }
+                        }
+                        Button {
+                            runner.start(
                                 token: quipToken,
                                 domain: quipDomain,
                                 documentDestination: documentDestination,
@@ -579,32 +595,20 @@ struct ControlBar: View {
                                 deleteAfterCopy: deleteAfterCopy,
                                 rateDelay: 0.5,
                                 notesAccount: notesAccount,
-                                exportFolder: exportFolder
+                                exportFolder: exportFolder,
+                                existingFileBehavior: existingFileBehavior
                             )
+                        } label: {
+                            Label("Start Exporting", systemImage: "arrow.down.circle.fill")
                         }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canStart)
                     }
-                    Button {
-                        runner.start(
-                            token: quipToken,
-                            domain: quipDomain,
-                            documentDestination: documentDestination,
-                            spreadsheetDestination: spreadsheetDestination,
-                            deleteAfterCopy: deleteAfterCopy,
-                            rateDelay: 0.5,
-                            notesAccount: notesAccount,
-                            exportFolder: exportFolder,
-                            existingFileBehavior: existingFileBehavior
-                        )
-                    } label: {
-                        Label("Start Exporting", systemImage: "arrow.down.circle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canStart)
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
     }
 
     private func saveLog() {

@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "QuipExporter",
-            path: "Sources/QuipExporter"
+            path: "Sources/QuipExporter",
+            swiftSettings: [.define("DEBUG", .when(configuration: .debug))]
         ),
         .testTarget(
             name: "QuipExporterTests",
