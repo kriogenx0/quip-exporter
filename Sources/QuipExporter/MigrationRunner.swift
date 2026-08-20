@@ -63,6 +63,7 @@ class MigrationRunner: ObservableObject {
     @Published var authError: String?
     @Published var tokenTestResult: TokenTestResult?
     @Published var copiedFiles: [CopiedFile] = []
+    @Published var scannedDocuments: [ScannedDocument] = []
 
     private var migrationTask: Task<Void, Never>?
 
@@ -121,9 +122,15 @@ class MigrationRunner: ObservableObject {
                 }
             }
 
-            func recordFile(_ directory: String, _ file: String) async {
+            func recordFile(_ directory: String, _ file: String, _ status: FileStatus) async {
                 guard let self else { return }
-                await MainActor.run { self.copiedFiles.append(CopiedFile(directory: directory, file: file)) }
+                await MainActor.run {
+                    if let idx = self.copiedFiles.lastIndex(where: { $0.directory == directory && $0.file == file }) {
+                        self.copiedFiles[idx].status = status
+                    } else {
+                        self.copiedFiles.append(CopiedFile(directory: directory, file: file, status: status))
+                    }
+                }
             }
 
             let confirm: ((String, [String], Bool) async -> ExportDestination?)?
@@ -247,6 +254,7 @@ class MigrationRunner: ObservableObject {
         scanSummary = nil
         authError = nil
         copiedFiles = []
+        scannedDocuments = []
         resultsKind = .scan
 
         migrationTask = Task.detached { [weak self] in
@@ -263,6 +271,11 @@ class MigrationRunner: ObservableObject {
                 await MainActor.run { self.authError = message }
             }
 
+            func recordDocument(_ directory: String, _ title: String) async {
+                guard let self else { return }
+                await MainActor.run { self.scannedDocuments.append(ScannedDocument(directory: directory, title: title)) }
+            }
+
             let summary = await scan(
                 client: client,
                 documentDestination: documentDestination,
@@ -271,6 +284,7 @@ class MigrationRunner: ObservableObject {
                 notesAccount: notesAccount,
                 exportFolder: exportFolder,
                 notifyFailure: notifyFailure,
+                recordDocument: recordDocument,
                 log: log
             )
 

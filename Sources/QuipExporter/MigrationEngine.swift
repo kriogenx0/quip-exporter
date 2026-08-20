@@ -35,7 +35,7 @@ func run(
     confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)? = nil,
     notifyFailure: (String) async -> Void = { _ in },
     count: (RunEvent) async -> Void = { _ in },
-    recordFile: (String, String) async -> Void = { _, _ in },
+    recordFile: (String, String, FileStatus) async -> Void = { _, _, _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async {
     await log("Fetching current user...", .info)
@@ -90,12 +90,13 @@ func run(
     }
 
     if runGuard.stopped {
-        if runGuard.isAuthFailure {
-            await log("Stopped: the Quip token was rejected (expired or revoked).", .error)
-        } else {
-            await log("Stopped: \(runGuard.failureReason ?? "an error occurred").", .error)
-        }
-        await notifyFailure(runGuard.failureReason ?? "The Quip token was rejected.")
+        let reason = runGuard.failureReason ?? "an error occurred"
+        await log("Stopped: \(reason).", .error)
+        await notifyFailure(reason)
+    } else if runGuard.allFetchesRejected {
+        let reason = "The token was accepted, but every folder and document it tried to access came back \"Not authorized\". It likely no longer has real access to this account."
+        await log("Stopped: \(reason)", .error)
+        await notifyFailure(reason)
     } else {
         await log("Done. Migrated \(visitedThreads.count) documents across \(visitedFolders.count) folders.", .info)
     }
@@ -111,6 +112,7 @@ func scan(
     notesAccount: String,
     exportFolder: URL?,
     notifyFailure: (String) async -> Void = { _ in },
+    recordDocument: (String, String) async -> Void = { _, _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async -> ScanSummary? {
     await log("Scanning Quip account...", .info)
@@ -159,17 +161,20 @@ func scan(
             folderId: fid, notesPath: ["From Quip"], mdPath: ["From Quip"],
             client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-            destinations: destinations, runGuard: runGuard, summary: &summary, log: log
+            destinations: destinations, runGuard: runGuard, summary: &summary, recordDocument: recordDocument, log: log
         )
     }
 
     if runGuard.stopped {
-        if runGuard.isAuthFailure {
-            await log("Scan stopped: the Quip token was rejected (expired or revoked).", .error)
-        } else {
-            await log("Scan stopped: \(runGuard.failureReason ?? "an error occurred").", .error)
-        }
-        await notifyFailure(runGuard.failureReason ?? "The Quip token was rejected.")
+        let reason = runGuard.failureReason ?? "an error occurred"
+        await log("Scan stopped: \(reason).", .error)
+        await notifyFailure(reason)
+        return nil
+    }
+    if runGuard.allFetchesRejected {
+        let reason = "The token was accepted, but every folder and document it tried to access came back \"Not authorized\". It likely no longer has real access to this account."
+        await log("Scan stopped: \(reason)", .error)
+        await notifyFailure(reason)
         return nil
     }
 
@@ -200,17 +205,25 @@ private func migrateFolder(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     count: (RunEvent) async -> Void,
-    recordFile: (String, String) async -> Void,
+    recordFile: (String, String, FileStatus) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visitedFolders.contains(folderId), !Task.isCancelled, !runGuard.stopped else { return }
     visitedFolders.insert(folderId)
 
     let data: QuipFolderResponse
-    do { data = try await client.getFolder(folderId) } catch {
+    do {
+        runGuard.recordFetchAttempt()
+        data = try await client.getFolder(folderId)
+    } catch {
+        if isAuthError(error) {
+            runGuard.recordNotAuthorizedSkip()
+            await log("Skipping folder \(folderId) — not authorized: \(error.localizedDescription)", .warning)
+            return
+        }
         await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error)
         await count(.error)
-        runGuard.stop(reason: error.localizedDescription, isAuthFailure: isAuthError(error))
+        runGuard.stop(reason: error.localizedDescription)
         return
     }
 
@@ -303,17 +316,25 @@ private func migrateThread(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     count: (RunEvent) async -> Void,
-    recordFile: (String, String) async -> Void,
+    recordFile: (String, String, FileStatus) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visited.contains(threadId), !Task.isCancelled, !runGuard.stopped else { return }
     visited.insert(threadId)
 
     let data: QuipThreadResponse
-    do { data = try await client.getThread(threadId) } catch {
+    do {
+        runGuard.recordFetchAttempt()
+        data = try await client.getThread(threadId)
+    } catch {
+        if isAuthError(error) {
+            runGuard.recordNotAuthorizedSkip()
+            await log("Skipping thread \(threadId) — not authorized: \(error.localizedDescription)", .warning)
+            return
+        }
         await log("Failed to fetch thread \(threadId): \(error.localizedDescription)", .error)
         await count(.error)
-        runGuard.stop(reason: error.localizedDescription, isAuthFailure: isAuthError(error))
+        runGuard.stop(reason: error.localizedDescription)
         return
     }
 
@@ -367,6 +388,7 @@ private func migrateThread(
             case .stop: return
             case .proceed(let update):
                 wasUpdate = update
+                await recordFile(dirDisplay, noteTitle, .inProgress)
                 if update {
                     noteId = try nw.updateNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId, createdStr: createdStr)
                 } else {
@@ -376,6 +398,7 @@ private func migrateThread(
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle, .failed)
             runGuard.stop(reason: error.localizedDescription)
             return
         }
@@ -390,7 +413,7 @@ private func migrateThread(
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
-        await recordFile(dirDisplay, noteTitle)
+        await recordFile(dirDisplay, noteTitle, .done)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -431,18 +454,20 @@ private func migrateThread(
         case .proceed(let update): wasUpdate = update
         }
 
+        await recordFile(dirDisplay, noteTitle + ".md", .inProgress)
         do {
             try mw.writeContent(newContent, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle + ".md", .failed)
             runGuard.stop(reason: error.localizedDescription)
             return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
-        await recordFile(dirDisplay, noteTitle + ".md")
+        await recordFile(dirDisplay, noteTitle + ".md", .done)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -481,18 +506,20 @@ private func migrateThread(
         case .proceed(let update): wasUpdate = update
         }
 
+        await recordFile(dirDisplay, noteTitle + ".html", .inProgress)
         do {
             try hw.writeContent(newContent, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle + ".html", .failed)
             runGuard.stop(reason: error.localizedDescription)
             return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
-        await recordFile(dirDisplay, noteTitle + ".html")
+        await recordFile(dirDisplay, noteTitle + ".html", .done)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -537,18 +564,20 @@ private func migrateThread(
         case .proceed(let update): wasUpdate = update
         }
 
+        await recordFile(dirDisplay, noteTitle + ".numbers", .inProgress)
         do {
             try nuw.writeSheets(sheets, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            await recordFile(dirDisplay, noteTitle + ".numbers", .failed)
             runGuard.stop(reason: error.localizedDescription)
             return
         }
 
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
-        await recordFile(dirDisplay, noteTitle + ".numbers")
+        await recordFile(dirDisplay, noteTitle + ".numbers", .done)
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
                 try await client.trashThread(threadId, trashFolderId: trashFolderId)
@@ -592,11 +621,17 @@ private func migrateThread(
         case .proceed(let update): wasUpdate = update
         }
 
+        for sheet in sheets {
+            await recordFile("\(dirDisplay)/\(noteTitle)", sheet.name + ".csv", .inProgress)
+        }
         do {
             try cw.writeSheets(sheets, title: noteTitle, dir: dir)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
+            for sheet in sheets {
+                await recordFile("\(dirDisplay)/\(noteTitle)", sheet.name + ".csv", .failed)
+            }
             runGuard.stop(reason: error.localizedDescription)
             return
         }
@@ -604,7 +639,7 @@ private func migrateThread(
         let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
         for sheet in sheets {
-            await recordFile("\(dirDisplay)/\(noteTitle)", sheet.name + ".csv")
+            await recordFile("\(dirDisplay)/\(noteTitle)", sheet.name + ".csv", .done)
         }
         if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
             do {
@@ -635,15 +670,24 @@ private func scanFolder(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     summary: inout ScanSummary,
+    recordDocument: (String, String) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visitedFolders.contains(folderId), !Task.isCancelled, !runGuard.stopped else { return }
     visitedFolders.insert(folderId)
 
     let data: QuipFolderResponse
-    do { data = try await client.getFolder(folderId) } catch {
+    do {
+        runGuard.recordFetchAttempt()
+        data = try await client.getFolder(folderId)
+    } catch {
+        if isAuthError(error) {
+            runGuard.recordNotAuthorizedSkip()
+            await log("Skipping folder \(folderId) — not authorized: \(error.localizedDescription)", .warning)
+            return
+        }
         await log("Failed to fetch folder \(folderId): \(error.localizedDescription)", .error)
-        runGuard.stop(reason: error.localizedDescription, isAuthFailure: isAuthError(error))
+        runGuard.stop(reason: error.localizedDescription)
         return
     }
 
@@ -672,14 +716,14 @@ private func scanFolder(
                 threadId: threadId, notesPath: nextMdPath, dirs: dirs,
                 client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, visited: &visitedThreads,
-                destinations: destinations, runGuard: runGuard, summary: &summary, log: log
+                destinations: destinations, runGuard: runGuard, summary: &summary, recordDocument: recordDocument, log: log
             )
         } else if let childId = child.folderId {
             await scanFolder(
                 folderId: childId, notesPath: nextNotesPath, mdPath: nextMdPath,
                 client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-                destinations: destinations, runGuard: runGuard, summary: &summary, log: log
+                destinations: destinations, runGuard: runGuard, summary: &summary, recordDocument: recordDocument, log: log
             )
         }
     }
@@ -697,15 +741,24 @@ private func scanThread(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     summary: inout ScanSummary,
+    recordDocument: (String, String) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
     guard !visited.contains(threadId), !Task.isCancelled, !runGuard.stopped else { return }
     visited.insert(threadId)
 
     let data: QuipThreadResponse
-    do { data = try await client.getThread(threadId) } catch {
+    do {
+        runGuard.recordFetchAttempt()
+        data = try await client.getThread(threadId)
+    } catch {
+        if isAuthError(error) {
+            runGuard.recordNotAuthorizedSkip()
+            await log("Skipping thread \(threadId) — not authorized: \(error.localizedDescription)", .warning)
+            return
+        }
         await log("Failed to fetch thread \(threadId): \(error.localizedDescription)", .error)
-        runGuard.stop(reason: error.localizedDescription, isAuthFailure: isAuthError(error))
+        runGuard.stop(reason: error.localizedDescription)
         return
     }
 
@@ -728,6 +781,9 @@ private func scanThread(
         noteTitle: noteTitle, createdStr: createdStr, dirs: dirs, writers: writers
     )
     guard handled else { return }
+
+    let dirDisplay = notesPath.count > 1 ? notesPath.dropFirst().joined(separator: " / ") : "Root folder"
+    await recordDocument(dirDisplay, noteTitle)
 
     if exists {
         summary.toUpdate += 1

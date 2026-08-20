@@ -53,6 +53,19 @@ struct CopiedFile: Identifiable, Equatable {
     let id = UUID()
     let directory: String
     let file: String
+    var status: FileStatus
+}
+
+enum FileStatus: Equatable {
+    case inProgress, done, failed
+}
+
+// A single document found during a read-only scan, for display grouped by parent
+// directory in the Summary tab.
+struct ScannedDocument: Identifiable, Equatable {
+    let id = UUID()
+    let directory: String
+    let title: String
 }
 
 // Tallies produced by a read-only scan of the Quip account, without writing anything.
@@ -84,20 +97,37 @@ enum ResultsKind {
     case none, scan, export
 }
 
-// Stops a run/scan the moment anything goes wrong — an auth rejection, a failed
-// fetch, a write failure — rather than limping on and reporting a pile of per-item
-// errors at the end. isAuthFailure distinguishes a rejected token (which prompts for
-// a new one) from any other error (which just needs to be surfaced and stop the run).
+// Stops a run/scan the moment anything unrecoverable goes wrong — a failed fetch, a
+// write failure — rather than limping on and reporting a pile of per-item errors at
+// the end. A "Not authorized" on a specific folder/thread is NOT treated as
+// unrecoverable (the token itself was already validated at the start of the run), so
+// callers skip that item and keep going instead of calling stop(). fetchAttempts and
+// notAuthorizedSkips track every fetch attempted vs. rejected as not-authorized, so a
+// token that's technically valid but has lost access to everything (every fetch
+// rejected) can still be reported as a failure instead of silently grinding through
+// the whole account with nothing to show for it.
 final class RunGuard {
     private(set) var stopped = false
     private(set) var failureReason: String?
-    private(set) var isAuthFailure = false
+    private(set) var fetchAttempts = 0
+    private(set) var notAuthorizedSkips = 0
 
-    func stop(reason: String, isAuthFailure: Bool = false) {
+    func stop(reason: String) {
         guard !stopped else { return }
         stopped = true
         failureReason = reason
-        self.isAuthFailure = isAuthFailure
+    }
+
+    func recordFetchAttempt() {
+        fetchAttempts += 1
+    }
+
+    func recordNotAuthorizedSkip() {
+        notAuthorizedSkips += 1
+    }
+
+    var allFetchesRejected: Bool {
+        fetchAttempts > 0 && notAuthorizedSkips == fetchAttempts
     }
 }
 

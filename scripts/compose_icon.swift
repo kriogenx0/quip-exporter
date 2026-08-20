@@ -19,8 +19,15 @@ result.lockFocus()
 // Blue rounded-square background, matching macOS's own icon corner-radius convention.
 let cornerRadius = size.width * 0.2237
 let background = NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: cornerRadius, yRadius: cornerRadius)
-NSColor(calibratedRed: 0.16, green: 0.42, blue: 0.88, alpha: 1.0).setFill()
-background.fill()
+background.addClip()
+let gradient = NSGradient(
+    colors: [
+        NSColor(calibratedRed: 0.36, green: 0.62, blue: 0.98, alpha: 1.0),
+        NSColor(calibratedRed: 0.16, green: 0.42, blue: 0.88, alpha: 1.0),
+        NSColor(calibratedRed: 0.04, green: 0.22, blue: 0.62, alpha: 1.0)
+    ]
+)!
+gradient.draw(in: NSRect(origin: .zero, size: size), angle: -90)
 
 // The Quip logo itself, shrunk and pinned near the top.
 let logoSide = size.width * 0.58
