@@ -111,6 +111,7 @@ func scan(
     notesAccount: String,
     exportFolder: URL?,
     notifyFailure: (String) async -> Void = { _ in },
+    count: (ScanEvent) async -> Void = { _ in },
     recordFile: (String, String, FileStatus) async -> Void = { _, _, _ in },
     log: (String, LogEntry.Level) async -> Void
 ) async -> ScanSummary? {
@@ -160,7 +161,7 @@ func scan(
             folderId: fid, notesPath: ["Quip Export"], mdPath: ["Quip Export"],
             client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
             currentUserId: user.id, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-            destinations: destinations, runGuard: runGuard, summary: &summary, recordFile: recordFile, log: log
+            destinations: destinations, runGuard: runGuard, summary: &summary, count: count, recordFile: recordFile, log: log
         )
     }
 
@@ -683,6 +684,7 @@ private func scanFolder(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     summary: inout ScanSummary,
+    count: (ScanEvent) async -> Void,
     recordFile: (String, String, FileStatus) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
@@ -723,14 +725,14 @@ private func scanFolder(
                 threadId: threadId, notesPath: nextMdPath, dirs: dirs,
                 client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, visited: &visitedThreads,
-                destinations: destinations, runGuard: runGuard, summary: &summary, recordFile: recordFile, log: log
+                destinations: destinations, runGuard: runGuard, summary: &summary, count: count, recordFile: recordFile, log: log
             )
         } else if let childId = child.folderId {
             await scanFolder(
                 folderId: childId, notesPath: nextNotesPath, mdPath: nextMdPath,
                 client: client, writers: writers, deleteAfterCopy: deleteAfterCopy,
                 currentUserId: currentUserId, visitedFolders: &visitedFolders, visitedThreads: &visitedThreads,
-                destinations: destinations, runGuard: runGuard, summary: &summary, recordFile: recordFile, log: log
+                destinations: destinations, runGuard: runGuard, summary: &summary, count: count, recordFile: recordFile, log: log
             )
         }
     }
@@ -748,6 +750,7 @@ private func scanThread(
     destinations: DestinationConfig,
     runGuard: RunGuard,
     summary: inout ScanSummary,
+    count: (ScanEvent) async -> Void,
     recordFile: (String, String, FileStatus) async -> Void,
     log: (String, LogEntry.Level) async -> Void
 ) async {
@@ -790,11 +793,14 @@ private func scanThread(
 
     if exists {
         summary.toUpdate += 1
+        await count(.update)
     } else {
         summary.toTransfer += 1
+        await count(.transfer)
     }
     if deleteAfterCopy && !shared {
         summary.toTrash += 1
+        await count(.trash)
     }
 }
 

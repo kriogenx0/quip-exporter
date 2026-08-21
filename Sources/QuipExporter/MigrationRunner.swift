@@ -244,7 +244,7 @@ class MigrationRunner: ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         logEntries = []
-        scanSummary = nil
+        scanSummary = ScanSummary()
         authError = nil
         copiedFiles = []
         resultsKind = .scan
@@ -263,6 +263,17 @@ class MigrationRunner: ObservableObject {
                 await MainActor.run { self.authError = message }
             }
 
+            func count(_ event: ScanEvent) async {
+                guard let self else { return }
+                await MainActor.run {
+                    switch event {
+                    case .transfer: self.scanSummary?.toTransfer += 1
+                    case .update: self.scanSummary?.toUpdate += 1
+                    case .trash: self.scanSummary?.toTrash += 1
+                    }
+                }
+            }
+
             func recordFile(_ directory: String, _ file: String, _ status: FileStatus) async {
                 guard let self else { return }
                 await MainActor.run { self.copiedFiles.append(CopiedFile(directory: directory, file: file, status: status)) }
@@ -276,6 +287,7 @@ class MigrationRunner: ObservableObject {
                 notesAccount: notesAccount,
                 exportFolder: exportFolder,
                 notifyFailure: notifyFailure,
+                count: count,
                 recordFile: recordFile,
                 log: log
             )

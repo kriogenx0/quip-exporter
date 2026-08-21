@@ -391,9 +391,11 @@ struct SummaryView: View {
             switch resultsKind {
             case .scan:
                 Section("Scan Results") {
-                    LabeledContent("Documents to transfer", value: "\(scanSummary?.toTransfer ?? 0)")
-                    LabeledContent("Documents to update", value: "\(scanSummary?.toUpdate ?? 0)")
-                    LabeledContent("Documents to trash in Quip after copying", value: "\(scanSummary?.toTrash ?? 0)")
+                    HStack(spacing: 12) {
+                        StatCard(title: "To Transfer", value: scanSummary?.toTransfer ?? 0)
+                        StatCard(title: "To Update", value: scanSummary?.toUpdate ?? 0)
+                        StatCard(title: "To Trash in Quip", value: scanSummary?.toTrash ?? 0)
+                    }
                 }
             case .export:
                 Section("Export Results") {
@@ -410,6 +412,24 @@ struct SummaryView: View {
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity)
+    }
+}
+
+private struct StatCard: View {
+    let title: String
+    let value: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(value)")
+                .font(.system(size: 26, weight: .semibold))
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -446,29 +466,40 @@ struct FilesPanel: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ForEach(groups) { group in
-                        Section {
-                            ForEach(group.files) { file in
-                                HStack {
-                                    statusIcon(file.status)
-                                    Text(file.file)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        ForEach(groups) { group in
+                            Section {
+                                ForEach(group.files) { file in
+                                    HStack {
+                                        statusIcon(file.status)
+                                        Text(file.file)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            } header: {
+                                Text(group.directory)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(.bar)
                             }
-                        } header: {
-                            Text(group.directory)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(.bar)
                         }
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom")
                     }
+                }
+                .onChange(of: files.count) { _ in
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+                .onAppear {
+                    proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -554,8 +585,6 @@ struct BottomBar: View {
 
                     Text(runner.copiedFiles.isEmpty ? " " : "\(runner.copiedFiles.count) total files")
                         .foregroundStyle(.secondary)
-
-                    Spacer()
 
                     #if DEBUG
                     if !runner.isRunning && (documentDestination == .appleNotes || spreadsheetDestination == .appleNotes) {

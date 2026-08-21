@@ -84,6 +84,10 @@ enum RunEvent {
     case folder, transferred, updated, unchanged, skipped, trashed, error
 }
 
+enum ScanEvent {
+    case transfer, update, trash
+}
+
 // Which results the Summary tab should display — whichever action (scan or export)
 // ran most recently, so the tab keeps showing that data during the run and after it finishes.
 enum ResultsKind {
