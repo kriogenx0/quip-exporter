@@ -71,6 +71,20 @@ class MigrationRunner: ObservableObject {
         return support.appendingPathComponent("QuipExporter/BlobCache")
     }()
 
+    // Shared by start()/scanAccount(), which each pass these as closures into a
+    // Task.detached block running off the main actor.
+    private func appendLog(_ msg: String, level: LogEntry.Level = .info) async {
+        await MainActor.run { self.logEntries.append(LogEntry(message: msg, level: level)) }
+    }
+
+    private func setAuthError(_ message: String) async {
+        await MainActor.run { self.authError = message }
+    }
+
+    private func appendCopiedFile(_ directory: String, _ file: String, _ status: FileStatus) async {
+        await MainActor.run { self.copiedFiles.append(CopiedFile(directory: directory, file: file, status: status)) }
+    }
+
     func start(
         token: String,
         domain: QuipDomain,
@@ -86,7 +100,8 @@ class MigrationRunner: ObservableObject {
         isRunning = true
         logEntries = []
         runSummary = RunSummary()
-        scanSummary = nil
+        // scanSummary is deliberately left as-is: if the user just scanned, its toTransfer
+        // count drives the determinate progress bar for this run (see ResultsPanel).
         authError = nil
         copiedFiles = []
         resultsKind = .export
@@ -96,14 +111,11 @@ class MigrationRunner: ObservableObject {
             let client = QuipClient(token: token, rateDelay: rateDelay, domain: domain)
 
             func log(_ msg: String, level: LogEntry.Level = .info) async {
-                let entry = LogEntry(message: msg, level: level)
-                guard let self else { return }
-                await MainActor.run { self.logEntries.append(entry) }
+                await self?.appendLog(msg, level: level)
             }
 
             func notifyFailure(_ message: String) async {
-                guard let self else { return }
-                await MainActor.run { self.authError = message }
+                await self?.setAuthError(message)
             }
 
             func count(_ event: RunEvent) async {
@@ -122,8 +134,7 @@ class MigrationRunner: ObservableObject {
             }
 
             func recordFile(_ directory: String, _ file: String, _ status: FileStatus) async {
-                guard let self else { return }
-                await MainActor.run { self.copiedFiles.append(CopiedFile(directory: directory, file: file, status: status)) }
+                await self?.appendCopiedFile(directory, file, status)
             }
 
             let confirm: ((String, [String], Bool) async -> ExportDestination?)?
@@ -253,14 +264,11 @@ class MigrationRunner: ObservableObject {
             let client = QuipClient(token: token, rateDelay: rateDelay, domain: domain)
 
             func log(_ msg: String, level: LogEntry.Level = .info) async {
-                let entry = LogEntry(message: msg, level: level)
-                guard let self else { return }
-                await MainActor.run { self.logEntries.append(entry) }
+                await self?.appendLog(msg, level: level)
             }
 
             func notifyFailure(_ message: String) async {
-                guard let self else { return }
-                await MainActor.run { self.authError = message }
+                await self?.setAuthError(message)
             }
 
             func count(_ event: ScanEvent) async {
@@ -275,8 +283,7 @@ class MigrationRunner: ObservableObject {
             }
 
             func recordFile(_ directory: String, _ file: String, _ status: FileStatus) async {
-                guard let self else { return }
-                await MainActor.run { self.copiedFiles.append(CopiedFile(directory: directory, file: file, status: status)) }
+                await self?.appendCopiedFile(directory, file, status)
             }
 
             let summary = await scan(
@@ -331,9 +338,7 @@ class MigrationRunner: ObservableObject {
 
         migrationTask = Task.detached { [weak self] in
             func log(_ msg: String, _ level: LogEntry.Level = .info) async {
-                let entry = LogEntry(message: msg, level: level)
-                guard let self else { return }
-                await MainActor.run { self.logEntries.append(entry) }
+                await self?.appendLog(msg, level: level)
             }
 
             let writer = NotesWriter(account: notesAccount)

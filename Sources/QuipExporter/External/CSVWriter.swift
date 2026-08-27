@@ -7,9 +7,7 @@ struct CSVWriter {
     let outputDir: URL
 
     func ensureFolder(path: [String]) throws -> URL {
-        let dir = path.dropFirst().reduce(outputDir) { $0.appendingPathComponent(sanitize($1)) }
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try FileExportSupport.ensureFolder(path: path, in: outputDir)
     }
 
     func noteExists(title: String, dir: URL) -> Bool {
@@ -18,15 +16,7 @@ struct CSVWriter {
     }
 
     func buildSheets(title: String, html: String, quipLink: String, createdStr: String, folderPath: [String]) throws -> [(name: String, rows: [[String]])] {
-        var sheets = SpreadsheetHTMLParser.parseSheets(fromHTML: html)
-        guard !sheets.isEmpty else { throw SpreadsheetError.noTablesFound }
-
-        let folderDisplay = folderPath.dropFirst().joined(separator: " / ")
-        var infoRows = [["Field", "Value"], ["Title", title], ["Created in Quip", createdStr]]
-        if !folderDisplay.isEmpty { infoRows.append(["Quip Folder", folderDisplay]) }
-        if !quipLink.isEmpty { infoRows.append(["Quip Link", quipLink]) }
-        sheets.append((name: "Quip Info", rows: infoRows))
-        return sheets
+        try SpreadsheetHTMLParser.buildSheets(title: title, html: html, quipLink: quipLink, createdStr: createdStr, folderPath: folderPath)
     }
 
     func writeSheets(_ sheets: [(name: String, rows: [[String]])], title: String, dir: URL) throws {
@@ -60,7 +50,6 @@ struct CSVWriter {
     }
 
     private func sanitize(_ name: String) -> String {
-        name.components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|")).joined(separator: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        FileExportSupport.sanitize(name)
     }
 }

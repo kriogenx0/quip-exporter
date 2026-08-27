@@ -11,9 +11,7 @@ struct NumbersWriter {
     let outputDir: URL
 
     func ensureFolder(path: [String]) throws -> URL {
-        let dir = path.dropFirst().reduce(outputDir) { $0.appendingPathComponent(sanitize($1)) }
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try FileExportSupport.ensureFolder(path: path, in: outputDir)
     }
 
     func noteExists(title: String, dir: URL) -> Bool {
@@ -22,15 +20,7 @@ struct NumbersWriter {
     }
 
     func buildSheets(title: String, html: String, quipLink: String, createdStr: String, folderPath: [String]) throws -> [(name: String, rows: [[String]])] {
-        var sheets = SpreadsheetHTMLParser.parseSheets(fromHTML: html)
-        guard !sheets.isEmpty else { throw SpreadsheetError.noTablesFound }
-
-        let folderDisplay = folderPath.dropFirst().joined(separator: " / ")
-        var infoRows = [["Field", "Value"], ["Title", title], ["Created in Quip", createdStr]]
-        if !folderDisplay.isEmpty { infoRows.append(["Quip Folder", folderDisplay]) }
-        if !quipLink.isEmpty { infoRows.append(["Quip Link", quipLink]) }
-        sheets.append((name: "Quip Info", rows: infoRows))
-        return sheets
+        try SpreadsheetHTMLParser.buildSheets(title: title, html: html, quipLink: quipLink, createdStr: createdStr, folderPath: folderPath)
     }
 
     // Numbers has no scriptable way to read a .numbers file's contents back out cheaply
@@ -64,8 +54,19 @@ struct NumbersWriter {
     }
 
     func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {
+        saveDebugHTML(html)
         let sheets = try buildSheets(title: title, html: html, quipLink: quipLink, createdStr: createdStr, folderPath: folderPath)
         try writeSheets(sheets, title: title, dir: dir)
+    }
+
+    // Temporary debugging aid: SpreadsheetHTMLParser was written without ever seeing real
+    // Quip spreadsheet HTML, so cells reported as empty/missing need a real sample to
+    // diagnose against. Kept alongside AppleScriptRunner's last-failed.applescript pattern.
+    private func saveDebugHTML(_ html: String) {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("QuipExporter")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? html.write(to: dir.appendingPathComponent("last-spreadsheet.html"), atomically: true, encoding: .utf8)
     }
 
     // MARK: - AppleScript generation
@@ -127,7 +128,6 @@ struct NumbersWriter {
     }
 
     private func sanitize(_ name: String) -> String {
-        name.components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|")).joined(separator: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        FileExportSupport.sanitize(name)
     }
 }

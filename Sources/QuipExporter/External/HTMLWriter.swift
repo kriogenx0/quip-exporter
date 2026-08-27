@@ -4,9 +4,7 @@ struct HTMLWriter {
     let outputDir: URL
 
     func ensureFolder(path: [String]) throws -> URL {
-        let dir = path.dropFirst().reduce(outputDir) { $0.appendingPathComponent(sanitize($1)) }
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try FileExportSupport.ensureFolder(path: path, in: outputDir)
     }
 
     func noteExists(title: String, dir: URL, createdStr: String) -> Bool {
@@ -45,19 +43,11 @@ struct HTMLWriter {
     }
 
     func saveImage(data: Data, blobHash: String, dir: URL) throws -> String {
-        let assetsDir = dir.appendingPathComponent("_assets")
-        try FileManager.default.createDirectory(at: assetsDir, withIntermediateDirectories: true)
-        let ext = data.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]) ? "png" : "jpg"
-        let file = assetsDir.appendingPathComponent("\(blobHash).\(ext)")
-        if !FileManager.default.fileExists(atPath: file.path) {
-            try data.write(to: file)
-        }
-        return "_assets/\(blobHash).\(ext)"
+        try FileExportSupport.saveImage(data: data, blobHash: blobHash, dir: dir)
     }
 
     private func sanitize(_ name: String) -> String {
-        name.components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|")).joined(separator: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        FileExportSupport.sanitize(name)
     }
 
     private func escAttr(_ s: String) -> String {

@@ -22,6 +22,21 @@ struct SpreadsheetHTMLParser {
         }
     }
 
+    // Parses the thread's spreadsheet HTML into per-tab sheets and appends a trailing
+    // "Quip Info" sheet with export metadata — shared by CSVWriter and NumbersWriter,
+    // which otherwise differ only in how they serialize sheets to disk.
+    static func buildSheets(title: String, html: String, quipLink: String, createdStr: String, folderPath: [String]) throws -> [(name: String, rows: [[String]])] {
+        var sheets = parseSheets(fromHTML: html)
+        guard !sheets.isEmpty else { throw SpreadsheetError.noTablesFound }
+
+        let folderDisplay = folderPath.dropFirst().joined(separator: " / ")
+        var infoRows = [["Field", "Value"], ["Title", title], ["Created in Quip", createdStr]]
+        if !folderDisplay.isEmpty { infoRows.append(["Quip Folder", folderDisplay]) }
+        if !quipLink.isEmpty { infoRows.append(["Quip Link", quipLink]) }
+        sheets.append((name: "Quip Info", rows: infoRows))
+        return sheets
+    }
+
     static func csv(rows: [[String]]) -> String {
         rows.map { row in row.map(csvField).joined(separator: ",") }.joined(separator: "\r\n")
     }

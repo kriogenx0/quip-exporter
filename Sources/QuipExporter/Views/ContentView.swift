@@ -254,21 +254,18 @@ private struct FolderPickerRow: View {
 // MARK: - Migration info banner
 
 private func describe(_ destination: ExportDestination, category: String, notesAccount: String, exportFolder: URL?) -> String {
+    let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
     switch destination {
     case .appleNotes:
         let account = notesAccount.isEmpty ? "your default Notes account" : "the \"\(notesAccount)\" account"
         return "\(category) are copied from your Quip account (Desktop, Starred, and Shared folders) into \(account) under a top-level \"Quip Export\" folder, preserving the folder hierarchy. Desktop, Starred, and Private folders are flattened into the root."
     case .numbers:
-        let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
         return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as native Numbers documents inside \(folder), preserving the folder hierarchy."
     case .csv:
-        let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
         return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as CSV files inside \(folder), preserving the folder hierarchy. Each spreadsheet becomes a folder with one CSV file per tab."
     case .markdown:
-        let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
         return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as Markdown files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder."
     case .html:
-        let folder = exportFolder.map { "\"\($0.lastPathComponent)\"" } ?? "the selected folder"
         return "\(category) are exported from your Quip account (Desktop, Starred, and Shared folders) as HTML files inside \(folder), preserving the folder hierarchy. Images are saved alongside each file in an _assets/ subfolder."
     case .ask:
         return "For each \(category.lowercased()), asks where to export it (configure the export folder above to enable more options)."
@@ -324,14 +321,33 @@ struct ResultsPanel: View {
         runner.resultsKind != .none || runner.authError != nil
     }
 
+    // Only meaningful during a real export, and only once a same-session Scan has told
+    // us how many documents there are to transfer — otherwise there's no total to show
+    // progress against, so callers fall back to an indeterminate spinner.
+    private var transferProgress: (current: Int, total: Int)? {
+        guard runner.resultsKind == .export, let total = runner.scanSummary?.toTransfer, total > 0 else { return nil }
+        return (runner.runSummary.documentsTransferred, total)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if runner.isRunning {
-                HStack {
-                    ProgressView().scaleEffect(0.7)
-                    Text(runner.resultsKind == .scan ? "Scanning…" : "Migrating…").foregroundStyle(.secondary)
+                if let progress = transferProgress {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ProgressView(value: Double(progress.current), total: Double(progress.total))
+                        Text("\(progress.current) of \(progress.total) files transferred")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                } else {
+                    HStack {
+                        ProgressView().scaleEffect(0.7)
+                        Text(runner.resultsKind == .scan ? "Scanning…" : "Migrating…").foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 8)
                 }
-                .padding(.top, 8)
             }
 
             if hasSummary {

@@ -16,6 +16,47 @@ struct NotesWriter {
         try AppleScriptRunner.run(script)
     }
 
+    // A regex-based replacement is best-effort throughout this file — Quip's HTML is
+    // never guaranteed to match a given pattern, so a failed/non-matching regex should
+    // leave the string untouched rather than throwing.
+    private func regexReplace(_ pattern: String, in s: String, with template: String,
+                              options: NSRegularExpression.Options = .caseInsensitive) -> String {
+        (try? NSRegularExpression(pattern: pattern, options: options))?
+            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: template) ?? s
+    }
+
+    // AppleScript snippet that loads the folder for later lines in the same `tell` block
+    // to operate on — repeated across every script that reads or writes a note.
+    private func loadFolderLine(_ folderId: String) -> String {
+        "set theFolder to folder id \"\(esc(folderId))\" of \(accountRef)"
+    }
+
+    // AppleScript snippet that returns `onMatch` for the first note titled `title` in
+    // theFolder whose body carries the "Created in Quip" marker for `createdStr`,
+    // otherwise returns `whenNotFound` — shared by the read-only lookups (noteExists,
+    // existingBody). updateNote needs the same match but also mutates on a hit, so it
+    // isn't a drop-in user of this helper.
+    private func findNoteScript(title: String, createdStr: String, onMatch: String, whenNotFound: String) -> String {
+        """
+        set matchNotes to every note of theFolder whose name is "\(esc(title))"
+        repeat with n in matchNotes
+            if body of n contains "Created in Quip: \(esc(createdStr))" then return \(onMatch)
+        end repeat
+        return \(whenNotFound)
+        """
+    }
+
+    // Writes `content` to a throwaway temp file and returns the AppleScript line that
+    // reads it back into `htmlContent` via `cat` — passing multi-KB HTML bodies as
+    // inline AppleScript string literals is unreliable, so every note-body write goes
+    // through a temp file instead. Caller is responsible for removing `url`.
+    private func writeTempFile(_ content: String, extension ext: String) throws -> (url: URL, catLine: String) {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".\(ext)")
+        try content.write(to: tmp, atomically: true, encoding: .utf8)
+        let catLine = "set htmlContent to do shell script \"cat \" & quoted form of \"\(tmp.path)\""
+        return (tmp, catLine)
+    }
+
     private func findOrCreateSteps(path: [String]) -> String {
         var lines = [
             "set acct to \(accountRef)",
@@ -56,12 +97,8 @@ end tell
     func noteExists(title: String, folderId: String, createdStr: String) throws -> Bool {
         try run("""
 tell application "Notes"
-    set theFolder to folder id "\(esc(folderId))" of \(accountRef)
-    set matchNotes to every note of theFolder whose name is "\(esc(title))"
-    repeat with n in matchNotes
-        if body of n contains "Created in Quip: \(esc(createdStr))" then return true
-    end repeat
-    return false
+    \(loadFolderLine(folderId))
+    \(findNoteScript(title: title, createdStr: createdStr, onMatch: "true", whenNotFound: "false"))
 end tell
 """) == "true"
     }
@@ -71,12 +108,8 @@ end tell
     func existingBody(title: String, folderId: String, createdStr: String) throws -> String? {
         let result = try run("""
 tell application "Notes"
-    set theFolder to folder id "\(esc(folderId))" of \(accountRef)
-    set matchNotes to every note of theFolder whose name is "\(esc(title))"
-    repeat with n in matchNotes
-        if body of n contains "Created in Quip: \(esc(createdStr))" then return body of n
-    end repeat
-    return ""
+    \(loadFolderLine(folderId))
+    \(findNoteScript(title: title, createdStr: createdStr, onMatch: "body of n", whenNotFound: "\"\""))
 end tell
 """)
         return result.isEmpty ? nil : result
@@ -84,14 +117,12 @@ end tell
 
     @discardableResult
     func createNote(title: String, htmlBody: String, folderId: String) throws -> String {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".html")
-        try htmlBody.write(to: tmp, atomically: true, encoding: .utf8)
+        let (tmp, catLine) = try writeTempFile(htmlBody, extension: "html")
         defer { try? FileManager.default.removeItem(at: tmp) }
         return try run("""
 tell application "Notes"
-    set theFolder to folder id "\(esc(folderId))" of \(accountRef)
-    set htmlContent to do shell script "cat " & quoted form of "\(tmp.path)"
+    \(loadFolderLine(folderId))
+    \(catLine)
     set theNote to make new note at theFolder with properties {body:htmlContent}
     return id of theNote
 end tell
@@ -102,14 +133,12 @@ end tell
     // (same title, body containing the same "Created in Quip" marker).
     @discardableResult
     func updateNote(title: String, htmlBody: String, folderId: String, createdStr: String) throws -> String {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".html")
-        try htmlBody.write(to: tmp, atomically: true, encoding: .utf8)
+        let (tmp, catLine) = try writeTempFile(htmlBody, extension: "html")
         defer { try? FileManager.default.removeItem(at: tmp) }
         return try run("""
 tell application "Notes"
-    set theFolder to folder id "\(esc(folderId))" of \(accountRef)
-    set htmlContent to do shell script "cat " & quoted form of "\(tmp.path)"
+    \(loadFolderLine(folderId))
+    \(catLine)
     set matchNotes to every note of theFolder whose name is "\(esc(title))"
     repeat with n in matchNotes
         if body of n contains "Created in Quip: \(esc(createdStr))" then
@@ -160,7 +189,7 @@ end tell
     func renameNote(oldTitle: String, newTitle: String, folderId: String) throws {
         _ = try run("""
 tell application "Notes"
-    set theFolder to folder id "\(esc(folderId))" of \(accountRef)
+    \(loadFolderLine(folderId))
     set theNote to first note of theFolder whose name is "\(esc(oldTitle))"
     set name of theNote to "\(esc(newTitle))"
 end tell
@@ -172,14 +201,12 @@ end tell
     func runFormattingTest(folderId: String) throws -> (sent: String, received: String) {
         let dateStr = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)
         let sent = Self.formattingTestHTML(dateStr: dateStr)
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".html")
-        try sent.write(to: tmp, atomically: true, encoding: .utf8)
+        let (tmp, catLine) = try writeTempFile(sent, extension: "html")
         defer { try? FileManager.default.removeItem(at: tmp) }
         let noteId = try run("""
 tell application "Notes"
-    set theFolder to folder id "\(esc(folderId))" of \(accountRef)
-    set htmlContent to do shell script "cat " & quoted form of "\(tmp.path)"
+    \(loadFolderLine(folderId))
+    \(catLine)
     set theNote to make new note at theFolder with properties {body:htmlContent}
     return id of theNote
 end tell
@@ -283,15 +310,10 @@ end tell
     private func convertChecklists(_ html: String) -> (html: String, items: [String]) {
         var s = html
         // Tag Quip checklist <ul> elements for processing
-        s = (try? NSRegularExpression(
-            pattern: #"<ul[^>]*class="[^"]*\b(?:checklist|checkmark|list-check\w*|todo)\b[^"]*"[^>]*>"#,
-            options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s),
-                                      withTemplate: "<ul data-quip-checklist>") ?? s
+        s = regexReplace(#"<ul[^>]*class="[^"]*\b(?:checklist|checkmark|list-check\w*|todo)\b[^"]*"[^>]*>"#,
+                          in: s, with: "<ul data-quip-checklist>")
         // Tag checked <li> items
-        s = (try? NSRegularExpression(pattern: #"<li[^>]*\bchecked\b[^>]*>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s),
-                                      withTemplate: "<li data-quip-checked>") ?? s
+        s = regexReplace(#"<li[^>]*\bchecked\b[^>]*>"#, in: s, with: "<li data-quip-checked>")
         return applyCheckboxSymbols(s)
     }
 
@@ -312,9 +334,7 @@ end tell
             var inner = String(remaining[..<c.lowerBound])
             // Sentinel prevents checked items from being re-matched by the unchecked pass
             inner = inner.replacingOccurrences(of: "<li data-quip-checked>", with: "\u{02}")
-            inner = (try? NSRegularExpression(pattern: #"<li[^>]*>"#, options: .caseInsensitive))?
-                .stringByReplacingMatches(in: inner, range: NSRange(inner.startIndex..., in: inner),
-                                          withTemplate: "<li>[ ] ") ?? inner
+            inner = regexReplace(#"<li[^>]*>"#, in: inner, with: "<li>[ ] ")
             inner = inner.replacingOccurrences(of: "\u{02}", with: "<li>[x] ")
             items.append(contentsOf: extractListItemTexts(inner))
             result += inner + close
@@ -332,8 +352,7 @@ end tell
         let ns = html as NSString
         return liRegex.matches(in: html, range: NSRange(location: 0, length: ns.length)).compactMap { match in
             let inner = ns.substring(with: match.range(at: 1))
-            let stripped = (try? NSRegularExpression(pattern: "<[^>]+>"))?
-                .stringByReplacingMatches(in: inner, range: NSRange(inner.startIndex..., in: inner), withTemplate: "") ?? inner
+            let stripped = regexReplace("<[^>]+>", in: inner, with: "")
             let text = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
             return text.isEmpty ? nil : text
         }
@@ -368,25 +387,17 @@ end tell
     private func stripListNoise(_ html: String) -> String {
         var s = html
         // Remove <p> wrappers inside <li>, preserving <li> attributes
-        s = (try? NSRegularExpression(pattern: #"(<li[^>]*>)\s*<p[^>]*>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "$1") ?? s
-        s = (try? NSRegularExpression(pattern: #"</p>\s*</li>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
+        s = regexReplace(#"(<li[^>]*>)\s*<p[^>]*>"#, in: s, with: "$1")
+        s = regexReplace(#"</p>\s*</li>"#, in: s, with: "</li>")
         // Remove trailing <br> before </li> and any <br> between items
-        s = (try? NSRegularExpression(pattern: #"<br\s*/?>\s*</li>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li>") ?? s
-        s = (try? NSRegularExpression(pattern: #"</li>\s*(?:<br\s*/?>\s*)*<li"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</li><li") ?? s
+        s = regexReplace(#"<br\s*/?>\s*</li>"#, in: s, with: "</li>")
+        s = regexReplace(#"</li>\s*(?:<br\s*/?>\s*)*<li"#, in: s, with: "</li><li")
         // Strip Quip-specific attributes from <ol> and <ul>
-        s = (try? NSRegularExpression(pattern: #"<ol[^>]+>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<ol>") ?? s
-        s = (try? NSRegularExpression(pattern: #"<ul[^>]+>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<ul>") ?? s
+        s = regexReplace(#"<ol[^>]+>"#, in: s, with: "<ol>")
+        s = regexReplace(#"<ul[^>]+>"#, in: s, with: "<ul>")
         // Merge consecutive <ul> and <ol> — handles both simple gaps and Quip's div-per-item wrapping
-        s = (try? NSRegularExpression(pattern: #"</ul>\s*(?:</div>\s*<div[^>]*>\s*)?(?:<br\s*/?>\s*)*<ul>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "") ?? s
-        s = (try? NSRegularExpression(pattern: #"</ol>\s*(?:</div>\s*<div[^>]*>\s*)?(?:<br\s*/?>\s*)*<ol>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "") ?? s
+        s = regexReplace(#"</ul>\s*(?:</div>\s*<div[^>]*>\s*)?(?:<br\s*/?>\s*)*<ul>"#, in: s, with: "")
+        s = regexReplace(#"</ol>\s*(?:</div>\s*<div[^>]*>\s*)?(?:<br\s*/?>\s*)*<ol>"#, in: s, with: "")
         return s
     }
 
@@ -430,30 +441,23 @@ end tell
 
     // Uses <blockquote type="cite"> which Apple Notes / WebKit recognises as a quoted block.
     private func convertBlockquotes(_ html: String) -> String {
-        return (try? NSRegularExpression(pattern: #"<blockquote[^>]*>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: html, range: NSRange(html.startIndex..., in: html),
-                                      withTemplate: #"<blockquote type="cite">"#) ?? html
+        regexReplace(#"<blockquote[^>]*>"#, in: html, with: #"<blockquote type="cite">"#)
     }
 
     private func normalizeHeadings(_ html: String) -> String {
         var s = html
         // Cap H4-H6 at H3 — Apple Notes only has Title (h1), Heading (h2), Subheading (h3)
-        s = (try? NSRegularExpression(pattern: #"<h[4-6][^>]*>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<h3>") ?? s
-        s = (try? NSRegularExpression(pattern: #"</h[4-6]>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "</h3>") ?? s
+        s = regexReplace(#"<h[4-6][^>]*>"#, in: s, with: "<h3>")
+        s = regexReplace(#"</h[4-6]>"#, in: s, with: "</h3>")
         // Strip Quip-specific attributes — clean <h1>/<h2>/<h3> is required for Apple Notes to apply its styles
-        s = (try? NSRegularExpression(pattern: #"<h([1-3])[^>]*>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "<h$1>") ?? s
+        s = regexReplace(#"<h([1-3])[^>]*>"#, in: s, with: "<h$1>")
         return s
     }
 
     private func convertHorizontalRules(_ html: String) -> String {
         let rule = "<p>——————————————————————————————</p>"
         // Match <hr> with any attributes or self-closing variants
-        return (try? NSRegularExpression(pattern: #"<hr[^>]*/?>"#, options: .caseInsensitive))?
-            .stringByReplacingMatches(in: html, range: NSRange(html.startIndex..., in: html),
-                                      withTemplate: rule) ?? html
+        return regexReplace(#"<hr[^>]*/?>"#, in: html, with: rule)
     }
 
     private func escHTML(_ s: String) -> String {

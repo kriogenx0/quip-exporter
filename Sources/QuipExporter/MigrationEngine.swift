@@ -23,6 +23,28 @@ private struct DestinationConfig {
     let confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)?
 }
 
+// Builds only the writers actually needed for the configured destinations — shared by
+// run() and scan(), which otherwise differ only in whether confirm/confirmOverwrite exist.
+private func makeWriters(
+    documentDestination: ExportDestination,
+    spreadsheetDestination: ExportDestination,
+    notesAccount: String,
+    exportFolder: URL?
+) -> Writers {
+    let categories = [documentDestination, spreadsheetDestination]
+    let notesWriter = (categories.contains(.appleNotes) || categories.contains(.ask))
+        ? NotesWriter(account: notesAccount) : nil
+    let markdownWriter = (categories.contains(.markdown) || categories.contains(.ask))
+        ? exportFolder.map { MarkdownWriter(outputDir: $0) } : nil
+    let htmlWriter = (categories.contains(.html) || categories.contains(.ask))
+        ? exportFolder.map { HTMLWriter(outputDir: $0) } : nil
+    let numbersWriter = (spreadsheetDestination == .numbers || spreadsheetDestination == .ask)
+        ? exportFolder.map { NumbersWriter(outputDir: $0) } : nil
+    let csvWriter = (spreadsheetDestination == .csv || spreadsheetDestination == .ask)
+        ? exportFolder.map { CSVWriter(outputDir: $0) } : nil
+    return Writers(notes: notesWriter, markdown: markdownWriter, html: htmlWriter, numbers: numbersWriter, csv: csvWriter)
+}
+
 func run(
     client: QuipClient,
     documentDestination: ExportDestination,
@@ -52,18 +74,8 @@ func run(
     let rootIds = ([user.desktopFolderId, user.starredFolderId].compactMap { $0 }
                    + (user.sharedFolderIds ?? []))
 
-    let categories = [documentDestination, spreadsheetDestination]
-    let notesWriter = (categories.contains(.appleNotes) || categories.contains(.ask))
-        ? NotesWriter(account: notesAccount) : nil
-    let markdownWriter = (categories.contains(.markdown) || categories.contains(.ask))
-        ? exportFolder.map { MarkdownWriter(outputDir: $0) } : nil
-    let htmlWriter = (categories.contains(.html) || categories.contains(.ask))
-        ? exportFolder.map { HTMLWriter(outputDir: $0) } : nil
-    let numbersWriter = (spreadsheetDestination == .numbers || spreadsheetDestination == .ask)
-        ? exportFolder.map { NumbersWriter(outputDir: $0) } : nil
-    let csvWriter = (spreadsheetDestination == .csv || spreadsheetDestination == .ask)
-        ? exportFolder.map { CSVWriter(outputDir: $0) } : nil
-    let writers = Writers(notes: notesWriter, markdown: markdownWriter, html: htmlWriter, numbers: numbersWriter, csv: csvWriter)
+    let writers = makeWriters(documentDestination: documentDestination, spreadsheetDestination: spreadsheetDestination,
+                               notesAccount: notesAccount, exportFolder: exportFolder)
     let destinations = DestinationConfig(document: documentDestination, spreadsheet: spreadsheetDestination,
                                           confirm: confirm, confirmOverwrite: confirmOverwrite)
 
@@ -128,18 +140,8 @@ func scan(
     let rootIds = ([user.desktopFolderId, user.starredFolderId].compactMap { $0 }
                    + (user.sharedFolderIds ?? []))
 
-    let categories = [documentDestination, spreadsheetDestination]
-    let notesWriter = (categories.contains(.appleNotes) || categories.contains(.ask))
-        ? NotesWriter(account: notesAccount) : nil
-    let markdownWriter = (categories.contains(.markdown) || categories.contains(.ask))
-        ? exportFolder.map { MarkdownWriter(outputDir: $0) } : nil
-    let htmlWriter = (categories.contains(.html) || categories.contains(.ask))
-        ? exportFolder.map { HTMLWriter(outputDir: $0) } : nil
-    let numbersWriter = (spreadsheetDestination == .numbers || spreadsheetDestination == .ask)
-        ? exportFolder.map { NumbersWriter(outputDir: $0) } : nil
-    let csvWriter = (spreadsheetDestination == .csv || spreadsheetDestination == .ask)
-        ? exportFolder.map { CSVWriter(outputDir: $0) } : nil
-    let writers = Writers(notes: notesWriter, markdown: markdownWriter, html: htmlWriter, numbers: numbersWriter, csv: csvWriter)
+    let writers = makeWriters(documentDestination: documentDestination, spreadsheetDestination: spreadsheetDestination,
+                               notesAccount: notesAccount, exportFolder: exportFolder)
     let destinations = DestinationConfig(document: documentDestination, spreadsheet: spreadsheetDestination,
                                           confirm: nil, confirmOverwrite: nil)
 
@@ -383,29 +385,29 @@ private func migrateThread(
         let (fullHtml, checklistItems) = nw.buildHTML(html: html, noteTitle: noteTitle, createdStr: createdStr,
                                                        folderDisplay: folderDisplay, quipLink: quipLink)
 
-        let wasUpdate: Bool
+        let exists: Bool
+        let oldBody: String?
+        do {
+            exists = try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr)
+            oldBody = exists ? try nw.existingBody(title: noteTitle, folderId: folderId, createdStr: createdStr) : nil
+        } catch {
+            await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
+            await count(.error)
+            await recordFile(dirDisplay, noteTitle, .error)
+            return
+        }
+
+        guard let wasUpdate = await resolveExistingOrBail(
+            exists: exists, title: noteTitle, notesPath: notesPath, oldContent: oldBody, newContent: fullHtml,
+            confirmOverwrite: destinations.confirmOverwrite, dirDisplay: dirDisplay, fileName: noteTitle,
+            count: count, recordFile: recordFile, log: log
+        ) else { return }
+
         var noteId = ""
         do {
-            let exists = try nw.noteExists(title: noteTitle, folderId: folderId, createdStr: createdStr)
-            let oldBody = exists ? try nw.existingBody(title: noteTitle, folderId: folderId, createdStr: createdStr) : nil
-            switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
-                                          oldContent: oldBody, newContent: fullHtml,
-                                          confirmOverwrite: destinations.confirmOverwrite) {
-            case .unchanged:
-                await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
-                await recordFile(dirDisplay, noteTitle, .skipped); return
-            case .skip:
-                await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
-                await recordFile(dirDisplay, noteTitle, .skipped); return
-            case .stop: return
-            case .proceed(let update):
-                wasUpdate = update
-                if update {
-                    noteId = try nw.updateNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId, createdStr: createdStr)
-                } else {
-                    noteId = try nw.createNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId)
-                }
-            }
+            noteId = wasUpdate
+                ? try nw.updateNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId, createdStr: createdStr)
+                : try nw.createNote(title: noteTitle, htmlBody: fullHtml, folderId: folderId)
         } catch {
             await log("  [error]    \(noteTitle) — \(error.localizedDescription)", .error)
             await count(.error)
@@ -421,24 +423,12 @@ private func migrateThread(
             }
         }
 
-        let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
         await recordFile(dirDisplay, noteTitle, .copied)
-        if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
-            do {
-                try await client.trashThread(threadId, trashFolderId: trashFolderId)
-                let trashedTitle = "\(noteTitle) (Trashed in Quip)"
-                try nw.renameNote(oldTitle: noteTitle, newTitle: trashedTitle, folderId: folderId)
-                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
-                await count(.trashed)
-            } catch {
-                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-                await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
-                await count(.error)
-            }
-        } else {
-            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-        }
+        await finishTransfer(threadId: threadId, client: client, trashFolderId: trashFolderId, shared: shared,
+                              deleteAfterCopy: deleteAfterCopy, wasUpdate: wasUpdate, noteTitle: noteTitle, createdStr: createdStr,
+                              onTrashed: { try nw.renameNote(oldTitle: noteTitle, newTitle: "\(noteTitle) (Trashed in Quip)", folderId: folderId) },
+                              count: count, log: log)
     }
 
     // --- Markdown path ---
@@ -454,19 +444,11 @@ private func migrateThread(
                                           createdStr: createdStr, folderPath: notesPath)
         let oldContent = exists ? mw.existingContent(title: noteTitle, dir: dir) : nil
 
-        let wasUpdate: Bool
-        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
-                                      oldContent: oldContent, newContent: newContent,
-                                      confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged:
-            await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
-            await recordFile(dirDisplay, noteTitle + ".md", .skipped); return
-        case .skip:
-            await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
-            await recordFile(dirDisplay, noteTitle + ".md", .skipped); return
-        case .stop: return
-        case .proceed(let update): wasUpdate = update
-        }
+        guard let wasUpdate = await resolveExistingOrBail(
+            exists: exists, title: noteTitle, notesPath: notesPath, oldContent: oldContent, newContent: newContent,
+            confirmOverwrite: destinations.confirmOverwrite, dirDisplay: dirDisplay, fileName: noteTitle + ".md",
+            count: count, recordFile: recordFile, log: log
+        ) else { return }
 
         do {
             try mw.writeContent(newContent, title: noteTitle, dir: dir)
@@ -477,22 +459,11 @@ private func migrateThread(
             return
         }
 
-        let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
         await recordFile(dirDisplay, noteTitle + ".md", .copied)
-        if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
-            do {
-                try await client.trashThread(threadId, trashFolderId: trashFolderId)
-                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
-                await count(.trashed)
-            } catch {
-                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-                await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
-                await count(.error)
-            }
-        } else {
-            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-        }
+        await finishTransfer(threadId: threadId, client: client, trashFolderId: trashFolderId, shared: shared,
+                              deleteAfterCopy: deleteAfterCopy, wasUpdate: wasUpdate, noteTitle: noteTitle, createdStr: createdStr,
+                              count: count, log: log)
     }
 
     // --- HTML path ---
@@ -508,19 +479,11 @@ private func migrateThread(
                                           createdStr: createdStr, folderPath: notesPath)
         let oldContent = exists ? hw.existingContent(title: noteTitle, dir: dir) : nil
 
-        let wasUpdate: Bool
-        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
-                                      oldContent: oldContent, newContent: newContent,
-                                      confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged:
-            await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
-            await recordFile(dirDisplay, noteTitle + ".html", .skipped); return
-        case .skip:
-            await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
-            await recordFile(dirDisplay, noteTitle + ".html", .skipped); return
-        case .stop: return
-        case .proceed(let update): wasUpdate = update
-        }
+        guard let wasUpdate = await resolveExistingOrBail(
+            exists: exists, title: noteTitle, notesPath: notesPath, oldContent: oldContent, newContent: newContent,
+            confirmOverwrite: destinations.confirmOverwrite, dirDisplay: dirDisplay, fileName: noteTitle + ".html",
+            count: count, recordFile: recordFile, log: log
+        ) else { return }
 
         do {
             try hw.writeContent(newContent, title: noteTitle, dir: dir)
@@ -531,22 +494,11 @@ private func migrateThread(
             return
         }
 
-        let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
         await recordFile(dirDisplay, noteTitle + ".html", .copied)
-        if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
-            do {
-                try await client.trashThread(threadId, trashFolderId: trashFolderId)
-                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
-                await count(.trashed)
-            } catch {
-                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-                await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
-                await count(.error)
-            }
-        } else {
-            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-        }
+        await finishTransfer(threadId: threadId, client: client, trashFolderId: trashFolderId, shared: shared,
+                              deleteAfterCopy: deleteAfterCopy, wasUpdate: wasUpdate, noteTitle: noteTitle, createdStr: createdStr,
+                              count: count, log: log)
     }
 
     // --- Numbers path ---
@@ -568,19 +520,11 @@ private func migrateThread(
         // it in Numbers) — the confirmation still shows a preview of what would be written.
         let newContent = nuw.previewText(sheets: sheets)
 
-        let wasUpdate: Bool
-        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
-                                      oldContent: nil, newContent: newContent,
-                                      confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged:
-            await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
-            await recordFile(dirDisplay, noteTitle + ".numbers", .skipped); return
-        case .skip:
-            await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
-            await recordFile(dirDisplay, noteTitle + ".numbers", .skipped); return
-        case .stop: return
-        case .proceed(let update): wasUpdate = update
-        }
+        guard let wasUpdate = await resolveExistingOrBail(
+            exists: exists, title: noteTitle, notesPath: notesPath, oldContent: nil, newContent: newContent,
+            confirmOverwrite: destinations.confirmOverwrite, dirDisplay: dirDisplay, fileName: noteTitle + ".numbers",
+            count: count, recordFile: recordFile, log: log
+        ) else { return }
 
         do {
             try nuw.writeSheets(sheets, title: noteTitle, dir: dir)
@@ -591,22 +535,11 @@ private func migrateThread(
             return
         }
 
-        let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
         await recordFile(dirDisplay, noteTitle + ".numbers", .copied)
-        if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
-            do {
-                try await client.trashThread(threadId, trashFolderId: trashFolderId)
-                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
-                await count(.trashed)
-            } catch {
-                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-                await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
-                await count(.error)
-            }
-        } else {
-            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-        }
+        await finishTransfer(threadId: threadId, client: client, trashFolderId: trashFolderId, shared: shared,
+                              deleteAfterCopy: deleteAfterCopy, wasUpdate: wasUpdate, noteTitle: noteTitle, createdStr: createdStr,
+                              count: count, log: log)
     }
 
     // --- CSV path ---
@@ -627,19 +560,11 @@ private func migrateThread(
         let newContent = SpreadsheetHTMLParser.previewText(sheets: sheets)
         let oldContent = exists ? cw.existingPreviewText(title: noteTitle, dir: dir) : nil
 
-        let wasUpdate: Bool
-        switch await resolveExisting(exists: exists, title: noteTitle, notesPath: notesPath,
-                                      oldContent: oldContent, newContent: newContent,
-                                      confirmOverwrite: destinations.confirmOverwrite) {
-        case .unchanged:
-            await log("  [unchanged]  \(noteTitle)", .info); await count(.unchanged)
-            await recordFile(dirDisplay, noteTitle + ".csv", .skipped); return
-        case .skip:
-            await log("  [skipped]  \(noteTitle)", .info); await count(.skipped)
-            await recordFile(dirDisplay, noteTitle + ".csv", .skipped); return
-        case .stop: return
-        case .proceed(let update): wasUpdate = update
-        }
+        guard let wasUpdate = await resolveExistingOrBail(
+            exists: exists, title: noteTitle, notesPath: notesPath, oldContent: oldContent, newContent: newContent,
+            confirmOverwrite: destinations.confirmOverwrite, dirDisplay: dirDisplay, fileName: noteTitle + ".csv",
+            count: count, recordFile: recordFile, log: log
+        ) else { return }
 
         do {
             try cw.writeSheets(sheets, title: noteTitle, dir: dir)
@@ -650,24 +575,13 @@ private func migrateThread(
             return
         }
 
-        let verb = wasUpdate ? "updated" : "copied"
         await count(wasUpdate ? .updated : .transferred)
         for sheet in sheets {
             await recordFile("\(dirDisplay)/\(noteTitle)", sheet.name + ".csv", .copied)
         }
-        if deleteAfterCopy && !shared && !trashFolderId.isEmpty {
-            do {
-                try await client.trashThread(threadId, trashFolderId: trashFolderId)
-                await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
-                await count(.trashed)
-            } catch {
-                await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-                await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
-                await count(.error)
-            }
-        } else {
-            await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
-        }
+        await finishTransfer(threadId: threadId, client: client, trashFolderId: trashFolderId, shared: shared,
+                              deleteAfterCopy: deleteAfterCopy, wasUpdate: wasUpdate, noteTitle: noteTitle, createdStr: createdStr,
+                              count: count, log: log)
     }
 }
 
@@ -890,6 +804,72 @@ private func resolveExisting(
     case .overwrite: return .proceed(wasUpdate: true)
     case .skip: return .skip
     case .stop: return .stop
+    }
+}
+
+// Wraps resolveExisting with the logging/counting/recordFile side effects every
+// migrateThread destination block needs around it — returns wasUpdate to proceed with a
+// write, or nil when the caller should bail out of the thread entirely (unchanged, skip,
+// or stop all behave like a `return` from migrateThread today).
+private func resolveExistingOrBail(
+    exists: Bool,
+    title: String,
+    notesPath: [String],
+    oldContent: String?,
+    newContent: String?,
+    confirmOverwrite: ((String, [String], String?, String?) async -> OverwriteChoice)?,
+    dirDisplay: String,
+    fileName: String,
+    count: (RunEvent) async -> Void,
+    recordFile: (String, String, FileStatus) async -> Void,
+    log: (String, LogEntry.Level) async -> Void
+) async -> Bool? {
+    switch await resolveExisting(exists: exists, title: title, notesPath: notesPath,
+                                  oldContent: oldContent, newContent: newContent, confirmOverwrite: confirmOverwrite) {
+    case .unchanged:
+        await log("  [unchanged]  \(title)", .info); await count(.unchanged)
+        await recordFile(dirDisplay, fileName, .skipped); return nil
+    case .skip:
+        await log("  [skipped]  \(title)", .info); await count(.skipped)
+        await recordFile(dirDisplay, fileName, .skipped); return nil
+    case .stop:
+        return nil
+    case .proceed(let update):
+        return update
+    }
+}
+
+// The tail every migrateThread destination block runs after a successful write: log the
+// verb, and (for private documents, when configured) trash the Quip thread and reflect
+// that in the log/count. onTrashed lets Apple Notes additionally rename the note to mark
+// it as trashed — every other destination has nothing extra to do here.
+private func finishTransfer(
+    threadId: String,
+    client: QuipClient,
+    trashFolderId: String,
+    shared: Bool,
+    deleteAfterCopy: Bool,
+    wasUpdate: Bool,
+    noteTitle: String,
+    createdStr: String,
+    onTrashed: (() throws -> Void)? = nil,
+    count: (RunEvent) async -> Void,
+    log: (String, LogEntry.Level) async -> Void
+) async {
+    let verb = wasUpdate ? "updated" : "copied"
+    guard deleteAfterCopy, !shared, !trashFolderId.isEmpty else {
+        await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
+        return
+    }
+    do {
+        try await client.trashThread(threadId, trashFolderId: trashFolderId)
+        try onTrashed?()
+        await log("  [\(verb) + trashed]  \(noteTitle)  (created \(createdStr))", .info)
+        await count(.trashed)
+    } catch {
+        await log("  [\(verb)]   \(noteTitle)  (created \(createdStr))", .info)
+        await log("  [error]    \(noteTitle) — could not trash: \(error.localizedDescription)", .warning)
+        await count(.error)
     }
 }
 
