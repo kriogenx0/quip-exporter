@@ -35,7 +35,10 @@ struct NumbersWriter {
         try? FileManager.default.removeItem(at: targetFile)
         suppressWhereToSaveDialog()
         let script = buildScript(sheets: sheets, targetFile: targetFile)
-        _ = try AppleScriptRunner.run(script)
+        // Numbers redoes layout/recalculation after every column write, which for a
+        // large real-world spreadsheet is slow enough that the default 3-minute budget
+        // (fine for Notes) isn't enough headroom.
+        _ = try AppleScriptRunner.run(script, timeout: 900)
         // osascript exiting cleanly only means Numbers accepted the `save` command, not
         // that the file actually landed — confirm it before reporting success.
         guard FileManager.default.fileExists(atPath: targetFile.path) else {
@@ -78,8 +81,15 @@ struct NumbersWriter {
     // every display and reliably stuck flashing the window on some setups. Explicitly
     // specifying the "Blank" template avoids the Template Chooser dialog `make new
     // document` would otherwise show.
-    private func buildScript(sheets: [(name: String, rows: [[String]])], targetFile: URL) -> String {
-        var lines = ["tell application \"Numbers\""]
+    // Internal rather than private so tests can inspect/execute the generated script
+    // directly without going through AppleScriptRunner (see AppleScriptContentFidelityTests).
+    func buildScript(sheets: [(name: String, rows: [[String]])], targetFile: URL) -> String {
+        // Numbers redoes layout/recalculation after every column write, and for a real
+        // spreadsheet that's slow enough to blow past AppleScript's default 2-minute
+        // per-Apple-Event timeout ("AppleEvent timed out (-1712)") even after cutting
+        // cell-by-cell sets down to one command per column. Raising it here overrides
+        // that default for every event sent within this script.
+        var lines = ["with timeout of 900 seconds", "tell application \"Numbers\""]
         lines.append("\tset doc1 to make new document with properties {document template:template \"Blank\"}")
         lines.append("\trepeat until (exists sheet 1 of doc1)")
         lines.append("\t\tdelay 0.1")
@@ -107,16 +117,22 @@ struct NumbersWriter {
             lines.append("\tend repeat")
             lines.append("\tmake new table at end of tables of \(sheetRef) with properties {row count:\(rowCount), column count:\(colCount)}")
             let tableRef = "table 1 of \(sheetRef)"
-            for (r, row) in sheet.rows.enumerated() {
-                for (c, value) in row.enumerated() where !value.isEmpty {
-                    lines.append("\tset value of cell \(c + 1) of row \(r + 1) of \(tableRef) to \"\(esc(value))\"")
+            // One AppleScript command per non-empty cell (thousands, for a real sheet)
+            // is far slower than Numbers can keep up with. Setting a whole column's
+            // cell values from a single list cuts that to one command per column.
+            for c in 0..<colCount {
+                let colValues = (0..<rowCount).map { r -> String in
+                    let value = (r < sheet.rows.count && c < sheet.rows[r].count) ? sheet.rows[r][c] : ""
+                    return "\"\(esc(value))\""
                 }
+                lines.append("\tset value of every cell of column \(c + 1) of \(tableRef) to {\(colValues.joined(separator: ", "))}")
             }
         }
 
         lines.append("\tsave doc1 in POSIX file \"\(esc(targetFile.path))\"")
         lines.append("\tclose doc1 saving no")
         lines.append("end tell")
+        lines.append("end timeout")
         return lines.joined(separator: "\n")
     }
 
