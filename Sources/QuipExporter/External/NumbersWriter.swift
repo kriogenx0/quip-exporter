@@ -76,27 +76,34 @@ struct NumbersWriter {
 
     // Only one document is ever created (no per-sheet CSV import docs, no cross-document
     // sheet copy), so unlike the old cross-document `duplicate`-based approach there's no
-    // longer any need for the window to stay rendered — it's hidden outright rather than
-    // just moved off-screen, which depended on AppleScript's position ending up outside
-    // every display and reliably stuck flashing the window on some setups. Explicitly
-    // specifying the "Blank" template avoids the Template Chooser dialog `make new
-    // document` would otherwise show.
+    // longer any need for the window to stay rendered — it's hidden once everything is
+    // built, rather than just moved off-screen, which depended on AppleScript's position
+    // ending up outside every display and reliably stuck flashing the window on some
+    // setups. Explicitly specifying the "Blank" template avoids the Template Chooser
+    // dialog `make new document` would otherwise show.
+    //
+    // `make new sheet`/`make new table` (and `duplicate`/`move` as substitutes) all fail
+    // with "AppleEvent handler failed (-10000)" on Numbers 15.3/macOS 26 — reproducible
+    // even against a bare new document, so it's a Numbers regression rather than
+    // something about this script. The only working way found to add a sheet is driving
+    // the "Insert > Sheet" menu item via System Events UI scripting, which needs the
+    // window on-screen and Numbers frontmost, hence hiding the window only at the end.
+    // Every sheet (including the first) then reuses its own pre-existing default table,
+    // resized in place, rather than deleting and remaking it.
+    //
     // Internal rather than private so tests can inspect/execute the generated script
     // directly without going through AppleScriptRunner (see AppleScriptContentFidelityTests).
     func buildScript(sheets: [(name: String, rows: [[String]])], targetFile: URL) -> String {
-        // Numbers redoes layout/recalculation after every column write, and for a real
+        // Numbers redoes layout/recalculation after every cell write, and for a real
         // spreadsheet that's slow enough to blow past AppleScript's default 2-minute
-        // per-Apple-Event timeout ("AppleEvent timed out (-1712)") even after cutting
-        // cell-by-cell sets down to one command per column. Raising it here overrides
-        // that default for every event sent within this script.
-        var lines = ["with timeout of 900 seconds", "tell application \"Numbers\""]
+        // per-Apple-Event timeout ("AppleEvent timed out (-1712)"). Raising it here
+        // overrides that default for every event sent within this script.
+        var lines = ["with timeout of 900 seconds", "tell application \"Numbers\"", "\tactivate"]
         lines.append("\tset doc1 to make new document with properties {document template:template \"Blank\"}")
         lines.append("\trepeat until (exists sheet 1 of doc1)")
         lines.append("\t\tdelay 0.1")
         lines.append("\tend repeat")
         lines.append("\ttry")
-        lines.append("\t\tset visible of window 1 of doc1 to false")
-        lines.append("\tend try")
 
         for (index, sheet) in sheets.enumerated() {
             let rowCount = max(1, sheet.rows.count)
@@ -104,32 +111,54 @@ struct NumbersWriter {
             let sheetRef: String
             if index == 0 {
                 sheetRef = "sheet 1 of doc1"
-                lines.append("\tset name of \(sheetRef) to \"\(esc(sheet.name))\"")
             } else {
-                lines.append("\tmake new sheet at end of sheets of doc1 with properties {name:\"\(esc(sheet.name))\"}")
+                // A fixed delay rather than polling `count of sheets of doc1` right after
+                // the click: querying Numbers over AppleEvents while its UI is mid-click
+                // reliably deadlocked the whole script during testing.
+                lines.append("\t\tactivate")
+                lines.append("\t\tdelay 0.3")
+                lines.append("\t\ttell application \"System Events\" to tell process \"Numbers\" to click menu item \"Sheet\" of menu \"Insert\" of menu bar 1")
+                lines.append("\t\tdelay 0.5")
                 sheetRef = "last sheet of doc1"
             }
-            // Tables aren't guaranteed to exist (or to have the right dimensions) on a
-            // fresh sheet, so any default table is cleared and replaced with one sized
-            // exactly to the data before cell values are set.
-            lines.append("\trepeat while (count of tables of \(sheetRef)) > 0")
-            lines.append("\t\tdelete table 1 of \(sheetRef)")
-            lines.append("\tend repeat")
-            lines.append("\tmake new table at end of tables of \(sheetRef) with properties {row count:\(rowCount), column count:\(colCount)}")
+            lines.append("\t\tset name of \(sheetRef) to \"\(esc(sheet.name))\"")
+            // A fresh sheet may have more than one default table; only the first is kept
+            // and resized to fit the data (see the `make new table` note above).
+            lines.append("\t\trepeat while (count of tables of \(sheetRef)) > 1")
+            lines.append("\t\t\tdelete table 2 of \(sheetRef)")
+            lines.append("\t\tend repeat")
+            lines.append("\t\tset row count of table 1 of \(sheetRef) to \(rowCount)")
+            lines.append("\t\tset column count of table 1 of \(sheetRef) to \(colCount)")
             let tableRef = "table 1 of \(sheetRef)"
-            // One AppleScript command per non-empty cell (thousands, for a real sheet)
-            // is far slower than Numbers can keep up with. Setting a whole column's
-            // cell values from a single list cuts that to one command per column.
-            for c in 0..<colCount {
-                let colValues = (0..<rowCount).map { r -> String in
+            // "set value of every cell of column N to {list}" (and the row/range
+            // equivalents) also fail on this Numbers build ("Can't make {...} into type
+            // number, date, text, boolean or missing value"), even though the
+            // single-cell form works — so despite being far chattier, cell-by-cell is
+            // what actually writes data. Blank source cells are skipped since a resized
+            // table's cells already default to empty.
+            //
+            // Format is forced to text before every write so Numbers never
+            // reinterprets a date- or number-looking source string (e.g. "Jan 1, 2026")
+            // into its own type and reformats what's displayed.
+            for r in 0..<rowCount {
+                for c in 0..<colCount {
                     let value = (r < sheet.rows.count && c < sheet.rows[r].count) ? sheet.rows[r][c] : ""
-                    return "\"\(esc(value))\""
+                    guard !value.isEmpty else { continue }
+                    let cellRef = "cell \(r + 1) of column \(c + 1) of \(tableRef)"
+                    lines.append("\t\tset format of \(cellRef) to text")
+                    lines.append("\t\tset value of \(cellRef) to \"\(esc(value))\"")
                 }
-                lines.append("\tset value of every cell of column \(c + 1) of \(tableRef) to {\(colValues.joined(separator: ", "))}")
             }
         }
 
-        lines.append("\tsave doc1 in POSIX file \"\(esc(targetFile.path))\"")
+        lines.append("\t\ttry")
+        lines.append("\t\t\tset visible of window 1 of doc1 to false")
+        lines.append("\t\tend try")
+        lines.append("\t\tsave doc1 in POSIX file \"\(esc(targetFile.path))\"")
+        lines.append("\ton error errMsg")
+        lines.append("\t\tclose doc1 saving no")
+        lines.append("\t\terror errMsg")
+        lines.append("\tend try")
         lines.append("\tclose doc1 saving no")
         lines.append("end tell")
         lines.append("end timeout")

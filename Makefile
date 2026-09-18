@@ -13,7 +13,7 @@ define assemble
 	codesign --force --deep --sign - $(BUILD_BUNDLE)
 endef
 
-.PHONY: help build dev publish install uninstall open close reinstall-open clean reinstall icon test-note test-markdown-import test-quick test
+.PHONY: help build dev publish install uninstall open close reinstall-open clean reinstall icon test-note test-markdown-import test-numbers test-quick test
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*## "}; {printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -68,5 +68,8 @@ test-note: build ## Build and run the Apple Notes formatting test
 
 test-markdown-import: build ## Build and run the Markdown import test
 	$(BUILD_BUNDLE)/Contents/MacOS/$(APP) --markdown-import-test
+
+test-numbers: ## Export and verify a complete cached Quip spreadsheet in Numbers
+	RUN_UI_TESTS=1 swift test --disable-sandbox --filter DebugRealHTMLTests/testWriteRealSheetToNumbers
 
 reinstall: uninstall install ## Uninstall then reinstall the release build
