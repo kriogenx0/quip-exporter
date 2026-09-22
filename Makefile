@@ -13,7 +13,7 @@ define assemble
 	codesign --force --deep --sign - $(BUILD_BUNDLE)
 endef
 
-.PHONY: help build dev publish install uninstall open close reinstall-open clean reinstall icon test-note test-markdown-import test-numbers test-quick test
+.PHONY: help build dev publish install uninstall open close reinstall-open clean reinstall icon test-note test-markdown-import test-numbers test-numbers-scratch test-quick test
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*## "}; {printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -23,6 +23,9 @@ test-quick: ## Run the fast unit test suite (no AppleScript/UI)
 
 test: ## Run the full test suite, including tests that drive real Notes/Numbers (may prompt for Automation access)
 	RUN_UI_TESTS=1 swift test --disable-sandbox
+
+test-numbers-scratch: ## Run the ad-hoc Numbers AppleScript scratch test (edit scripts/numbers-test.applescript)
+	bash scripts/numbers-test.sh
 
 build: ## Build the debug app bundle
 	swift build --disable-sandbox

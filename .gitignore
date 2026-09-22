@@ -6,3 +6,5 @@ build/
 xcuserdata/
 *.xcworkspace/xcuserdata/
 cache/
+scripts/numbers-test-counter.txt
+scripts/numbers-test-log.txt

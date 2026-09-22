@@ -1,0 +1,1 @@
+Example: query the app name (edit this file and numbers-test.applescript for your own debugging)
