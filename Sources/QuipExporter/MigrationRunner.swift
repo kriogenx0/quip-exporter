@@ -310,7 +310,7 @@ class MigrationRunner: ObservableObject {
     func stop() {
         migrationTask?.cancel()
         migrationTask = nil
-        logEntries.append(LogEntry(message: "Migration stopped by user.", level: .warning))
+        logEntries.append(LogEntry(message: "Export stopped by user.", level: .warning))
         isRunning = false
     }
 

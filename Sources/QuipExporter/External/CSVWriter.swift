@@ -1,8 +1,9 @@
 import Foundation
 
 // A CSV file can only hold one table, so every spreadsheet becomes a folder named after
-// its title containing one CSV per Quip tab (plus a "Quip Info.csv" with metadata) —
-// mirroring how Numbers itself exports a multi-sheet document to CSV.
+// its title containing one CSV per Quip tab, named "<title>-sheet1.csv", "<title>-sheet2.csv",
+// … (plus a "Quip Info.csv" with metadata) — mirroring how Numbers itself exports a
+// multi-sheet document to CSV.
 struct CSVWriter {
     let outputDir: URL
 
@@ -19,29 +20,41 @@ struct CSVWriter {
         try SpreadsheetHTMLParser.buildSheets(title: title, html: html, quipLink: quipLink, createdStr: createdStr, folderPath: folderPath)
     }
 
+    // One file name per entry in `sheets`. buildSheets always appends the "Quip Info"
+    // metadata sheet last, so everything before it is a real tab and gets numbered.
+    func fileNames(for sheets: [(name: String, rows: [[String]])], title: String) -> [String] {
+        sheets.indices.map { index in
+            index == sheets.count - 1 ? "Quip Info.csv" : "\(sanitize(title))-sheet\(index + 1).csv"
+        }
+    }
+
     func writeSheets(_ sheets: [(name: String, rows: [[String]])], title: String, dir: URL) throws {
         let subDir = dir.appendingPathComponent(sanitize(title))
         try? FileManager.default.removeItem(at: subDir)
         try FileManager.default.createDirectory(at: subDir, withIntermediateDirectories: true)
-        for sheet in sheets {
-            let file = subDir.appendingPathComponent(sanitize(sheet.name) + ".csv")
+        for (sheet, name) in zip(sheets, fileNames(for: sheets, title: title)) {
+            let file = subDir.appendingPathComponent(name)
             try SpreadsheetHTMLParser.csv(rows: sheet.rows).write(to: file, atomically: true, encoding: .utf8)
         }
     }
 
-    // Reconstructs the same "== name ==" preview text buildSheets/previewText would
-    // produce, but from the CSV files already on disk — for diffing against new content.
-    func existingPreviewText(title: String, dir: URL) -> String? {
+    // Preview text keyed by output file name rather than tab name, so it can be compared
+    // against existingPreviewText (the same files read back from disk).
+    func previewText(sheets: [(name: String, rows: [[String]])], title: String) -> String {
+        zip(sheets, fileNames(for: sheets, title: title)).map { sheet, name in
+            "== \(name) ==\n\(SpreadsheetHTMLParser.csv(rows: sheet.rows))"
+        }.joined(separator: "\n\n")
+    }
+
+    // Reconstructs the same text previewText would produce, but from the CSV files
+    // already on disk — for diffing against new content.
+    func existingPreviewText(title: String, dir: URL, sheets: [(name: String, rows: [[String]])]) -> String? {
         let subDir = dir.appendingPathComponent(sanitize(title))
-        guard let files = try? FileManager.default.contentsOfDirectory(at: subDir, includingPropertiesForKeys: nil)
-            .filter({ $0.pathExtension == "csv" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
-        else { return nil }
-        guard !files.isEmpty else { return nil }
-        let sections = files.compactMap { file -> String? in
-            guard let content = try? String(contentsOf: file, encoding: .utf8) else { return nil }
-            return "== \(file.deletingPathExtension().lastPathComponent) ==\n\(content)"
+        let sections = fileNames(for: sheets, title: title).compactMap { name -> String? in
+            guard let content = try? String(contentsOf: subDir.appendingPathComponent(name), encoding: .utf8) else { return nil }
+            return "== \(name) ==\n\(content)"
         }
-        return sections.joined(separator: "\n\n")
+        return sections.isEmpty ? nil : sections.joined(separator: "\n\n")
     }
 
     func writeNote(title: String, html: String, dir: URL, quipLink: String, createdStr: String, folderPath: [String]) throws {

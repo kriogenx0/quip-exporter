@@ -81,7 +81,7 @@ final class FileWriterTests: XCTestCase {
 
     // MARK: - CSVWriter
 
-    func testCSVWriterCreatesOneFilePerSheetPlusQuipInfo() throws {
+    func testCSVWriterNamesFilesAfterTitleWithSheetNumberPlusQuipInfo() throws {
         let writer = CSVWriter(outputDir: tempDir)
         let dir = try writer.ensureFolder(path: ["Quip Export"])
         let html = "<h2>Stations</h2><table><tr><td>Name</td><td>Code</td></tr><tr><td>Central</td><td>C1</td></tr></table>"
@@ -93,7 +93,7 @@ final class FileWriterTests: XCTestCase {
         let sheetFolder = dir.appendingPathComponent("My Sheet")
         XCTAssertTrue(writer.noteExists(title: "My Sheet", dir: dir))
 
-        let stationsCSV = try String(contentsOf: sheetFolder.appendingPathComponent("Stations.csv"), encoding: .utf8)
+        let stationsCSV = try String(contentsOf: sheetFolder.appendingPathComponent("My Sheet-sheet1.csv"), encoding: .utf8)
         XCTAssertEqual(stationsCSV, "Name,Code\r\nCentral,C1")
 
         let infoCSV = try String(contentsOf: sheetFolder.appendingPathComponent("Quip Info.csv"), encoding: .utf8)
@@ -101,5 +101,9 @@ final class FileWriterTests: XCTestCase {
         XCTAssertTrue(infoCSV.contains("Created in Quip,\"Jan 1, 2026\""))
         XCTAssertTrue(infoCSV.contains("Sheets"))
         XCTAssertTrue(infoCSV.contains("https://quip.com/xyz"))
+
+        // Reading the files back yields the same preview text as the freshly built sheets.
+        XCTAssertEqual(writer.existingPreviewText(title: "My Sheet", dir: dir, sheets: sheets),
+                       writer.previewText(sheets: sheets, title: "My Sheet"))
     }
 }

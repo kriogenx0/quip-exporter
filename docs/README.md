@@ -1,6 +1,6 @@
 # Quip Exporter
 
-A macOS app that migrates Quip documents, spreadsheets, and folders to Apple Notes, Numbers, CSV, Markdown, or HTML.
+A macOS app that exports Quip documents, spreadsheets, and folders to Apple Notes, Numbers, CSV, Markdown, or HTML.
 
 ## Download
 

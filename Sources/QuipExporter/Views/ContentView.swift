@@ -28,21 +28,19 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                ScrollView {
-                    SettingsPanel(
-                        quipToken: $quipToken,
-                        quipDomain: $quipDomain,
-                        documentDestination: $documentDestination,
-                        spreadsheetDestination: $spreadsheetDestination,
-                        deleteAfterCopy: $deleteAfterCopy,
-                        existingFileBehavior: $existingFileBehavior,
-                        notesAccount: $notesAccount,
-                        exportFolder: exportFolder,
-                        isRunning: runner.isRunning,
-                        tokenTestResult: runner.tokenTestResult,
-                        onTestToken: { runner.testToken(token: quipToken, domain: quipDomain) }
-                    )
-                }
+                SettingsPanel(
+                    quipToken: $quipToken,
+                    quipDomain: $quipDomain,
+                    documentDestination: $documentDestination,
+                    spreadsheetDestination: $spreadsheetDestination,
+                    deleteAfterCopy: $deleteAfterCopy,
+                    existingFileBehavior: $existingFileBehavior,
+                    notesAccount: $notesAccount,
+                    exportFolder: exportFolder,
+                    isRunning: runner.isRunning,
+                    tokenTestResult: runner.tokenTestResult,
+                    onTestToken: { token in runner.testToken(token: token, domain: quipDomain) }
+                )
                 .frame(width: 320)
 
                 Divider()
@@ -67,6 +65,7 @@ struct ContentView: View {
             )
         }
         .frame(minWidth: 850, minHeight: 600)
+        .onChange(of: quipToken) { _ in runner.tokenTestResult = nil }
     }
 }
 
@@ -83,73 +82,141 @@ struct SettingsPanel: View {
     @Binding var exportFolder: URL?
     let isRunning: Bool
     let tokenTestResult: TokenTestResult?
-    let onTestToken: () -> Void
+    let onTestToken: (String) -> Void
     @State private var showDescription = true
-    @State private var showPasteTokenSheet = false
+    @State private var showPasteToken = false
+    @State private var pasteError: String?
+    @State private var isTestingPaste = false
+
+    private var tokenIsValid: Bool { tokenTestResult?.succeeded == true }
 
     private var needsExportFolder: Bool {
         documentDestination != .appleNotes || spreadsheetDestination != .appleNotes
     }
 
     var body: some View {
-        Form {
-            Section {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Picker("Token", selection: $quipDomain) {
-                        ForEach(QuipDomain.allCases) { d in
-                            Text(d.rawValue).tag(d)
+                    SettingRow("Token") {
+                        Picker("Token", selection: $quipDomain) {
+                            ForEach(QuipDomain.allCases) { d in
+                                Text(d.rawValue).tag(d)
+                            }
                         }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
                     }
-                    .pickerStyle(.menu)
 
                     HStack {
                         Button("Get Token") {
                             NSWorkspace.shared.open(quipDomain.tokenURL)
-                            showPasteTokenSheet = true
+                            withAnimation { showPasteToken = true }
                         }
-                        Button("Test Token") { onTestToken() }
+                        if isTestingPaste {
+                            ProgressView().controlSize(.small)
+                        } else if tokenIsValid {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .help("Token is valid")
+                        } else {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.red)
+                                .help(quipToken.isEmpty ? "No token yet" : "Token hasn't been validated")
+                        }
+                    }
+
+                    // Only a validated token lets the area collapse; until then it stays open.
+                    Button {
+                        withAnimation { showPasteToken.toggle() }
+                    } label: {
+                        HStack {
+                            Text("Opens your Quip token page. Paste the token here to sign in.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.leading)
+                            Spacer()
+                            Image(systemName: "chevron.left")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .rotationEffect(.degrees(showPasteToken ? -90 : 0))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(showPasteToken && !tokenIsValid)
+
+                    if showPasteToken {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button("Paste Token") { pasteAndTest() }
+                                .disabled(isTestingPaste)
+
+                            Text(quipToken.isEmpty ? "No token yet" : quipToken)
+                                .font(.system(.callout, design: .monospaced))
+                                .foregroundStyle(quipToken.isEmpty ? .secondary : .primary)
+                                .textSelection(.enabled)
+                                .lineLimit(nil)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+
+                            if let pasteError {
+                                Text(pasteError)
+                                    .foregroundStyle(.red)
+                                    .font(.system(.callout, design: .monospaced))
+                            } else if let tokenTestResult, !tokenTestResult.succeeded {
+                                Text(tokenTestResult.message)
+                                    .foregroundStyle(.red)
+                                    .font(.system(.callout, design: .monospaced))
+                            }
+                        }
                     }
                 }
+                .disabled(isRunning)
 
-                if let tokenTestResult {
-                    Text(tokenTestResult.message)
-                        .foregroundStyle(tokenTestResult.succeeded ? .green : .red)
-                        .font(.callout)
-                }
-            }
-            .disabled(isRunning)
+                Divider()
 
-            Section {
-                Picker("Documents", selection: $documentDestination) {
-                    ForEach(ExportDestination.allCases.filter { $0 != .numbers && $0 != .csv }) { d in
-                        Text(d.rawValue).tag(d)
+                VStack(alignment: .leading, spacing: 12) {
+                    SettingRow("Documents") {
+                        Picker("Documents", selection: $documentDestination) {
+                            ForEach(ExportDestination.allCases.filter { $0 != .numbers && $0 != .csv }) { d in
+                                Text(d.rawValue).tag(d)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
                     }
-                }
-                .pickerStyle(.menu)
 
-                Picker("Spreadsheets", selection: $spreadsheetDestination) {
-                    ForEach(ExportDestination.allCases) { d in
-                        Text(d.rawValue).tag(d)
+                    SettingRow("Spreadsheets") {
+                        Picker("Spreadsheets", selection: $spreadsheetDestination) {
+                            ForEach(ExportDestination.allCases) { d in
+                                Text(d.rawValue).tag(d)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
                     }
-                }
-                .pickerStyle(.menu)
 
-                if needsExportFolder {
-                    FolderPickerRow(label: "Export Folder", url: $exportFolder)
-                }
-
-                Picker("If file already exists", selection: $existingFileBehavior) {
-                    ForEach(ExistingFileBehavior.allCases) { b in
-                        Text(b.rawValue).tag(b)
+                    if needsExportFolder {
+                        FolderPickerRow(label: "Export Folder", url: $exportFolder)
                     }
+
+                    SettingRow("If file already exists") {
+                        Picker("If file already exists", selection: $existingFileBehavior) {
+                            ForEach(ExistingFileBehavior.allCases) { b in
+                                Text(b.rawValue).tag(b)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                    }
+
+                    Toggle("Delete private Quip documents after copying", isOn: $deleteAfterCopy)
                 }
-                .pickerStyle(.menu)
+                .disabled(isRunning)
 
-                Toggle("Delete private Quip documents after copying", isOn: $deleteAfterCopy)
-            }
-            .disabled(isRunning)
+                Divider()
 
-            Section {
                 VStack(alignment: .leading, spacing: 4) {
                     Button {
                         withAnimation { showDescription.toggle() }
@@ -178,51 +245,57 @@ struct SettingsPanel: View {
                     }
                 }
             }
-            .disabled(false)
+            .padding(16)
         }
-        .formStyle(.grouped)
-        .padding(.horizontal, 4)
         .onChange(of: isRunning) { newValue in
             if newValue { showDescription = false }
         }
-        .sheet(isPresented: $showPasteTokenSheet) {
-            PasteTokenSheet(
-                onPaste: {
-                    showPasteTokenSheet = false
-                    if let pasted = NSPasteboard.general.string(forType: .string) {
-                        quipToken = pasted
-                        onTestToken()
-                    }
-                },
-                onCancel: { showPasteTokenSheet = false }
-            )
+        .onAppear {
+            if !quipToken.isEmpty, tokenTestResult == nil { onTestToken(quipToken) }
         }
+        .onChange(of: tokenTestResult?.message) { message in
+            guard message != nil, isTestingPaste else { return }
+            isTestingPaste = false
+            if tokenTestResult?.succeeded == true {
+                withAnimation { showPasteToken = false }
+            }
+        }
+    }
+
+    // Pastes the clipboard and tests it straight away. A valid token collapses the
+    // paste section (see onChange above); an invalid one leaves it open with the error.
+    private func pasteAndTest() {
+        let pasted = NSPasteboard.general.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !pasted.isEmpty else {
+            pasteError = "The clipboard has no text. Copy the token from your browser first."
+            return
+        }
+        pasteError = nil
+        quipToken = pasted
+        isTestingPaste = true
+        onTestToken(pasted)
     }
 }
 
-// MARK: - Paste Token Sheet
+// A setting with its label stacked above the control, since the sidebar is too narrow for
+// inline labels once the plain (non-Form) layout is used.
+private struct SettingRow<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: Content
 
-private struct PasteTokenSheet: View {
-    let onPaste: () -> Void
-    let onCancel: () -> Void
+    init(_ label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.content = content()
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Paste Your Token")
-                .font(.headline)
-            Text("Copy the token from the page that just opened in your browser, then paste it in below.")
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
                 .font(.callout)
                 .foregroundStyle(.secondary)
-
-            HStack {
-                Spacer()
-                Button("Cancel") { onCancel() }
-                Button("Paste Token") { onPaste() }
-                    .keyboardShortcut(.defaultAction)
-            }
+            content
         }
-        .padding(20)
-        .frame(width: 380)
     }
 }
 
@@ -233,8 +306,11 @@ private struct FolderPickerRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
+                .font(.callout)
+                .foregroundStyle(.secondary)
             HStack {
                 Text(url?.path ?? "Not configured")
+                    .font(.caption)
                     .foregroundStyle(url == nil ? .secondary : .primary)
                     .truncationMode(.middle)
                     .lineLimit(1)
@@ -329,6 +405,12 @@ struct ResultsPanel: View {
         return (runner.runSummary.documentsTransferred, total)
     }
 
+    private var indeterminateLabel: String {
+        if runner.resultsKind == .scan { return "Scanning…" }
+        let done = runner.runSummary.documentsTransferred
+        return done > 0 ? "Exporting… \(done) files transferred" : "Exporting…"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if runner.isRunning {
@@ -342,10 +424,13 @@ struct ResultsPanel: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
                 } else {
-                    HStack {
-                        ProgressView().scaleEffect(0.7)
-                        Text(runner.resultsKind == .scan ? "Scanning…" : "Migrating…").foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        ProgressView().progressViewStyle(.linear)
+                        Text(indeterminateLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
+                    .padding(.horizontal, 16)
                     .padding(.top, 8)
                 }
             }
@@ -407,7 +492,7 @@ struct SummaryView: View {
             switch resultsKind {
             case .scan:
                 Section("Scan Results") {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 8) {
                         StatCard(title: "To Transfer", value: scanSummary?.toTransfer ?? 0)
                         StatCard(title: "To Update", value: scanSummary?.toUpdate ?? 0)
                         StatCard(title: "To Trash in Quip", value: scanSummary?.toTrash ?? 0)
@@ -415,10 +500,17 @@ struct SummaryView: View {
                 }
             case .export:
                 Section("Export Results") {
-                    ForEach(rows, id: \.0) { label, value in
-                        LabeledContent(label) {
-                            Text("\(value)")
-                                .foregroundStyle(label == "Errors" && value > 0 ? .red : .primary)
+                    Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                        ForEach(Array(rows.chunked(into: 4).enumerated()), id: \.offset) { _, row in
+                            GridRow {
+                                ForEach(row, id: \.0) { label, value in
+                                    StatCard(
+                                        title: label,
+                                        value: value,
+                                        valueColor: label == "Errors" && value > 0 ? .red : .primary
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -434,18 +526,27 @@ struct SummaryView: View {
 private struct StatCard: View {
     let title: String
     let value: Int
+    var valueColor: Color = .primary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             Text("\(value)")
-                .font(.system(size: 26, weight: .semibold))
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(valueColor)
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(10)
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private extension Array {
+    func chunked(into size: Int) -> [[Element]] {
+        stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) }
     }
 }
 

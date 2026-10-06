@@ -20,13 +20,16 @@ actor QuipClient {
         }
     }
 
-    private func apiError(statusCode: Int, path: String, data: Data) -> Error {
-        let body = String(data: data, encoding: .utf8) ?? ""
+    private func isNotAuthorized(statusCode: Int, data: Data) -> Bool {
         let decoded = try? JSONDecoder().decode(QuipErrorBody.self, from: data)
-        let isNotAuthorized = statusCode == 401
+        return statusCode == 401
             || decoded?.error == "not_authorized"
             || (statusCode == 403 && decoded?.errorDescription?.hasPrefix("Not authorized") == true)
-        if isNotAuthorized {
+    }
+
+    private func apiError(statusCode: Int, path: String, data: Data) -> Error {
+        let body = String(data: data, encoding: .utf8) ?? ""
+        if isNotAuthorized(statusCode: statusCode, data: data) {
             return MigrationError.notAuthorized(path: path, body: body)
         }
         return MigrationError.api(statusCode: statusCode, path: path, body: body)
@@ -51,8 +54,15 @@ actor QuipClient {
     // Retry-After-aware backoff instead of failing the whole run outright.
     private let maxRetries = 5
 
+    // Quip sometimes answers a perfectly good token with a transient auth error, so an
+    // auth failure is retried twice more (three tries total), 2 seconds apart, before it's
+    // reported — a genuinely dead token just takes 4 extra seconds to be surfaced.
+    private let maxAuthRetries = 2
+    private let authRetryDelay: TimeInterval = 2
+
     private func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
         var attempt = 0
+        var authRetries = 0
         while true {
             do {
                 let (data, resp) = try await session.data(for: req)
@@ -64,6 +74,12 @@ actor QuipClient {
                 if isRateLimited, attempt < maxRetries {
                     try await Task.sleep(for: .seconds(retryDelay(after: http, attempt: attempt)))
                     attempt += 1
+                    continue
+                }
+                if !(200..<300).contains(http.statusCode), authRetries < maxAuthRetries,
+                   isNotAuthorized(statusCode: http.statusCode, data: data) {
+                    try await Task.sleep(for: .seconds(authRetryDelay))
+                    authRetries += 1
                     continue
                 }
                 return (data, http)

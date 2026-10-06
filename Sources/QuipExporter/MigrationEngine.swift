@@ -109,7 +109,7 @@ func run(
         }
         await notifyFailure(runGuard.failureReason ?? "The Quip token was rejected.")
     } else {
-        await log("Done. Migrated \(visitedThreads.count) documents across \(visitedFolders.count) folders.", .info)
+        await log("Done. Exported \(visitedThreads.count) documents across \(visitedFolders.count) folders.", .info)
     }
 }
 
@@ -211,8 +211,9 @@ private func prefetchChildren(_ children: [QuipFolderChild], client: QuipClient)
 private let skippedInNotes: Set<String> = ["Desktop", "Starred", "Private"]
 
 // Folder names that are flattened out of the file-based export path (Markdown/HTML/
-// Numbers/CSV) — e.g. "Desktop / Archive / Foo" becomes "Desktop / Foo".
-private let skippedInFiles: Set<String> = ["Archive"]
+// Numbers/CSV) — e.g. "Desktop / Archive / Foo" becomes "Desktop / Foo", and the root
+// "Starred" folder's contents land directly in the export folder.
+private let skippedInFiles: Set<String> = ["Archive", "Starred"]
 
 private func migrateFolder(
     folderId: String,
@@ -557,8 +558,8 @@ private func migrateThread(
             await recordFile(dirDisplay, noteTitle + ".csv", .error)
             return
         }
-        let newContent = SpreadsheetHTMLParser.previewText(sheets: sheets)
-        let oldContent = exists ? cw.existingPreviewText(title: noteTitle, dir: dir) : nil
+        let newContent = cw.previewText(sheets: sheets, title: noteTitle)
+        let oldContent = exists ? cw.existingPreviewText(title: noteTitle, dir: dir, sheets: sheets) : nil
 
         guard let wasUpdate = await resolveExistingOrBail(
             exists: exists, title: noteTitle, notesPath: notesPath, oldContent: oldContent, newContent: newContent,
@@ -576,8 +577,8 @@ private func migrateThread(
         }
 
         await count(wasUpdate ? .updated : .transferred)
-        for sheet in sheets {
-            await recordFile("\(dirDisplay)/\(noteTitle)", sheet.name + ".csv", .copied)
+        for name in cw.fileNames(for: sheets, title: noteTitle) {
+            await recordFile("\(dirDisplay)/\(noteTitle)", name, .copied)
         }
         await finishTransfer(threadId: threadId, client: client, trashFolderId: trashFolderId, shared: shared,
                               deleteAfterCopy: deleteAfterCopy, wasUpdate: wasUpdate, noteTitle: noteTitle, createdStr: createdStr,
